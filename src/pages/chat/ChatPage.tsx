@@ -26,6 +26,7 @@ import type { BatchImageMessage } from './types'
 import { isReplySuggestSession } from './replySuggest'
 import { checkOnlineSttConfigReady } from './utils/sttConfig'
 import { formatSessionTime } from './utils/time'
+import { createLiquidGlassMap, type GlassFilterMap } from '../../utils/liquidGlass'
 
 interface ChatPageProps {
   // 保留接口以备将来扩展
@@ -41,6 +42,38 @@ const INITIAL_PAGE_SIZE = 50
 const HISTORY_PAGE_SIZE = 25
 // 会话列表分页大小（后端按原始行分页，最多单次 1000）
 const SESSION_PAGE_SIZE = 300
+
+const CHAT_VIDEO_GLASS_SIZE = 48
+const CHAT_VIDEO_GLASS_SHAPE = { halfX: 0.18, halfY: 0.18, radius: 0.18, edge: 0.02, feather: 0.35, strength: 3 }
+
+function ChatVideoGlassDefs({ onReady }: { onReady: () => void }) {
+  const [map, setMap] = useState<GlassFilterMap | null>(null)
+
+  useEffect(() => {
+    const next = createLiquidGlassMap(CHAT_VIDEO_GLASS_SIZE, CHAT_VIDEO_GLASS_SIZE, CHAT_VIDEO_GLASS_SHAPE)
+    setMap(next)
+    if (next) onReady()
+  }, [onReady])
+
+  return (
+    <svg className="chat-video-glass-defs" aria-hidden="true" focusable="false">
+      {map && (
+        <filter
+          id="chat-video-glass-48"
+          filterUnits="userSpaceOnUse"
+          colorInterpolationFilters="sRGB"
+          x="0"
+          y="0"
+          width={map.width}
+          height={map.height}
+        >
+          <feImage href={map.href} xlinkHref={map.href} width={map.width} height={map.height} result="displacementMap" />
+          <feDisplacementMap in="SourceGraphic" in2="displacementMap" scale={map.scale} xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+      )}
+    </svg>
+  )
+}
 
 // 刷新会话列表的合并：新页按后端顺序作为头部（保留未变化对象引用避免闪烁），
 // 之前滚动分页加载出的更早会话保留在尾部，不因刷新只覆盖首个区间而丢失
@@ -67,6 +100,8 @@ function mergeRefreshedSessions(prev: ChatSession[], page: ChatSession[]): ChatS
 
 function ChatPage(_props: ChatPageProps) {
   const [quoteStyle, setQuoteStyle] = useState<QuoteStyleConfig>('default')
+  const [videoGlassReady, setVideoGlassReady] = useState(false)
+  const handleVideoGlassReady = useCallback(() => setVideoGlassReady(true), [])
 
   const refreshQuoteStyle = useCallback(() => {
     getQuoteStyle()
@@ -1609,7 +1644,8 @@ function ChatPage(_props: ChatPageProps) {
   const currentSession = sessions.find(s => s.username === currentSessionId)
 
   return (
-    <div className={`chat-page standalone ${isResizing ? 'resizing' : ''}`}>
+    <div className={`chat-page standalone${isResizing ? ' resizing' : ''}${videoGlassReady ? ' chat-video-glass-ready' : ''}`}>
+      <ChatVideoGlassDefs onReady={handleVideoGlassReady} />
       {/* 左侧会话列表 */}
       <SessionSidebar
         sidebarRef={sidebarRef}

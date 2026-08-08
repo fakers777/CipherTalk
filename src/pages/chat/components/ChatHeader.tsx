@@ -1,6 +1,6 @@
-import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, Bulb, CircleCheck, CircleDashed, CircleInfo, Ellipsis, FaceRobot, FileText, Layers, LayoutSideContentRight, MagicWand, Microphone, Picture, Sparkles } from '@gravity-ui/icons'
+import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, Bulb, CircleCheck, CircleDashed, CircleInfo, Ellipsis, FaceRobot, FileText, Layers, LayoutSideContentRight, MagicWand, Microphone, Picture, Sparkles, TrashBin } from '@gravity-ui/icons'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Drawer, Dropdown, Label, Switch, Tooltip } from '@heroui/react'
+import { AlertDialog, Button, Drawer, Dropdown, Label, Switch, Tooltip } from '@heroui/react'
 import { CloneSelfModal } from './CloneSelfModal'
 import { DateJumpPicker } from './DateJumpPicker'
 import type { ChatSession } from '../../../types/models'
@@ -17,10 +17,13 @@ import {
   updateReplySuggestSettings,
 } from '../replySuggest'
 import { SessionAvatar } from './SessionSidebar'
+import { useTopToast } from '../hooks/useTopToast'
 import PluginChatToolbar from '../../../features/plugins/PluginChatToolbar'
 
 // 磁贴窗口支持 Windows/macOS；Linux 暂不显示该开关。
 const SUPPORTS_REPLY_TILE = /win|mac/.test(navigator.platform.toLowerCase())
+// 全自动依赖键盘注入：Windows 走 user32，macOS 走 CGEvent（需辅助功能授权）
+const SUPPORTS_AUTO_SEND = /win|mac/.test(navigator.platform.toLowerCase())
 
 type Progress = {
   current: number
@@ -227,8 +230,11 @@ export function ChatHeader({
   }, [currentSession.username])
 
   const patchReplySettings = useCallback((patch: Partial<ReplySuggestSettings>) => {
-    // 打开自动建议时联动打开「参与磁贴」（可随后单独关闭）
-    const effective = patch.enabled === true ? { ...patch, tile: true } : patch
+    // 打开自动建议时联动打开「参与磁贴」（可随后单独关闭）；
+    // 全自动依赖前两层——建议不生成、不推磁贴，自动发送就无从触发，所以一次全开，别让人猜
+    const effective = patch.autoSend === true
+      ? { ...patch, enabled: true, tile: true }
+      : patch.enabled === true ? { ...patch, tile: true } : patch
     setReplySettings((prev) => ({ ...prev, ...effective }))
     void updateReplySuggestSettings(currentSession.username, effective).then(() => {
       // 配置写入后再重算参与列表，避免主进程读到旧配置。
@@ -239,6 +245,8 @@ export function ChatHeader({
   // 自画像状态：是否已克隆"我"对此联系人的说话画像（self: 前缀键），用于菜单显示
   const [myPersonaExists, setMyPersonaExists] = useState(false)
   const [cloneSelfOpen, setCloneSelfOpen] = useState(false)
+  const [deleteSelfOpen, setDeleteSelfOpen] = useState(false)
+  const { showTopToast } = useTopToast()
   useEffect(() => {
     let cancelled = false
     void window.electronAPI.persona.get(`self:${currentSession.username}`).then((res) => {
@@ -360,27 +368,13 @@ export function ChatHeader({
     : []
   const sessionDisplayName = contactNickName || currentSession.username
 
-  // AI摘要：{提示词+@目标} 经 localStorage 递给主窗口 AI 助手页（AgentPage 侧消费：新建对话+@+自动发送），再唤起主窗口
+  // AI摘要：独立窗口（/chat-summary）里用专用提示词跑，不跳 AI 助手页
   const handleAiSummary = (rangeText: string) => {
-    const target = isGroupChat(currentSession.username)
-      ? `群聊「${sessionDisplayName}」`
-      : `我和「${sessionDisplayName}」`
-    const prompt = `请总结${target}${rangeText}的聊天记录。
-
-要求：
-1. 按主题归纳主要讨论内容和关键结论。
-2. 标出重要事项、待办、承诺和情绪变化。
-3. 引用关键原话或聊天片段作为依据，不要凭空推断。
-4. 如果该时间段没有聊天记录，请直接说明。`
-    localStorage.setItem('agent:pendingAutoRun', JSON.stringify({
-      text: prompt,
-      mention: {
-        username: currentSession.username,
-        displayName: sessionDisplayName,
-        avatarUrl: currentSession.avatarUrl,
-      },
-    }))
-    void window.electronAPI.window.focusMainWindow('/agent')
+    void window.electronAPI.window.openChatSummaryWindow(
+      currentSession.username,
+      sessionDisplayName,
+      rangeText
+    )
   }
   // 仅私聊可开消息提醒（排除群聊/公众号）
   const isPrivateSession = !isGroupChat(currentSession.username)
@@ -586,7 +580,7 @@ export function ChatHeader({
               </Dropdown.Popover>
             </Dropdown>
           </Tooltip.Trigger>
-          <Tooltip.Content placement="bottom">AI 摘要（在 AI 助手中生成）</Tooltip.Content>
+          <Tooltip.Content placement="bottom">AI 摘要（独立窗口生成）</Tooltip.Content>
         </Tooltip>
 
         {isPrivateSession && (
@@ -620,12 +614,14 @@ export function ChatHeader({
                 </Button>
                 <Dropdown.Popover className="min-w-56" placement="bottom end">
               <Dropdown.Menu
+                shouldCloseOnSelect={false}
                 onAction={(key) => {
                   // 自动建议/深度模式由各自的 Switch 独立切换，不走整行 onAction
                   if (key === 'cloneSelf') setCloneSelfOpen(true)
+                  if (key === 'deleteSelf') setDeleteSelfOpen(true)
                 }}
               >
-                <Dropdown.Item id="cloneSelf" textValue="克隆我自己">
+                <Dropdown.Item id="cloneSelf" textValue="克隆我自己" shouldCloseOnSelect>
                   <FaceRobot className="size-4 shrink-0 text-muted" />
                   <Label>{myPersonaExists ? '重建我的自画像' : '克隆我自己'}</Label>
                   <span className={`ml-auto text-xs ${myPersonaExists ? 'text-success' : 'text-muted-foreground'}`}>
@@ -637,6 +633,12 @@ export function ChatHeader({
                     ) : '未克隆'}
                   </span>
                 </Dropdown.Item>
+                {myPersonaExists ? (
+                  <Dropdown.Item id="deleteSelf" textValue="删除我的自画像" shouldCloseOnSelect>
+                    <TrashBin className="size-4 shrink-0 text-danger" />
+                    <Label>删除我的自画像</Label>
+                  </Dropdown.Item>
+                ) : null}
                 <Dropdown.Item id="toggle" textValue="自动建议">
                   <Bulb className="size-4 shrink-0 text-muted" />
                   <Label>自动建议</Label>
@@ -655,6 +657,26 @@ export function ChatHeader({
                     </Switch>
                   </span>
                 </Dropdown.Item>
+                {SUPPORTS_AUTO_SEND && (
+                  <Dropdown.Item id="autoSend" textValue="全自动回复">
+                    <MagicWand className="size-4 shrink-0 text-muted" />
+                    <Label>全自动回复</Label>
+                    <span
+                      className="ml-auto inline-flex pointer-events-auto"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Switch
+                        aria-label="全自动回复"
+                        isSelected={replySettings.autoSend}
+                        onChange={(v) => patchReplySettings({ autoSend: v })}
+                      >
+                        <Switch.Control>
+                          <Switch.Thumb />
+                        </Switch.Control>
+                      </Switch>
+                    </span>
+                  </Dropdown.Item>
+                )}
                 <Dropdown.Item id="deep" textValue="深度模式">
                   <Layers className="size-4 shrink-0 text-muted" />
                   <Label>深度模式</Label>
@@ -703,6 +725,7 @@ export function ChatHeader({
                   </Dropdown.Item>
                   <Dropdown.Popover className="min-w-36" placement="right top">
                     <Dropdown.Menu
+                      shouldCloseOnSelect={false}
                       selectedKeys={new Set([replySettings.style])}
                       selectionMode="single"
                       onAction={(key) => patchReplySettings({ style: String(key) as ReplySuggestStyle })}
@@ -724,6 +747,7 @@ export function ChatHeader({
                   </Dropdown.Item>
                   <Dropdown.Popover className="min-w-28" placement="right top">
                     <Dropdown.Menu
+                      shouldCloseOnSelect={false}
                       selectedKeys={new Set([String(replySettings.count)])}
                       selectionMode="single"
                       onAction={(key) => patchReplySettings({ count: Number(key) })}
@@ -780,6 +804,7 @@ export function ChatHeader({
         )}
 
         <DateJumpPicker
+          sessionId={currentSessionId}
           value={selectedDate}
           onChange={onSelectedDateChange}
           onJump={onJumpToDate}
@@ -874,8 +899,49 @@ export function ChatHeader({
             }
           }}
           session={currentSession}
+          exists={myPersonaExists}
         />
       )}
+
+      {/* 删除自画像确认：画像/问答索引/导演笔记由主进程一并清掉 */}
+      <AlertDialog.Backdrop
+        isOpen={deleteSelfOpen}
+        onOpenChange={(open) => { if (!open) setDeleteSelfOpen(false) }}
+      >
+        <AlertDialog.Container>
+          <AlertDialog.Dialog className="sm:max-w-100">
+            <AlertDialog.CloseTrigger />
+            <AlertDialog.Header>
+              <AlertDialog.Icon status="danger" />
+              <AlertDialog.Heading>删除我对「{currentSession.displayName || currentSession.username}」的自画像？</AlertDialog.Heading>
+            </AlertDialog.Header>
+            <AlertDialog.Body>
+              <p className="text-sm text-muted">
+                画像、真实问答索引和导演笔记都会删除，「像我」风格的回复建议会退回默认语气。聊天记录不受影响，之后可以随时重新克隆。
+              </p>
+            </AlertDialog.Body>
+            <AlertDialog.Footer>
+              <Button slot="close" variant="tertiary">取消</Button>
+              <Button
+                slot="close"
+                variant="danger"
+                onPress={() => {
+                  void window.electronAPI.persona.delete(`self:${currentSession.username}`).then((res) => {
+                    if (res.success) {
+                      setMyPersonaExists(false)
+                      showTopToast('自画像已删除')
+                    } else {
+                      showTopToast(res.error || '删除失败', false)
+                    }
+                  })
+                }}
+              >
+                删除
+              </Button>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
     </div>
   )
 }

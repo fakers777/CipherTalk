@@ -1,3 +1,4 @@
+import { autoReplyService } from './autoReplyService'
 import { chatService } from './chatService'
 import { isPrivateSession } from './notifyService'
 import { voiceTranscribeService } from './voiceTranscribeService'
@@ -21,7 +22,7 @@ const SUGGEST_IMAGE_MAX_BASE64 = 6 * 1024 * 1024
 const SUGGEST_IMAGE_MAX = 3
 
 type SessionSnap = { lastTs: number; unread: number }
-type PerSession = { enabled?: boolean; tile?: boolean; style?: string; count?: number; deep?: boolean }
+type PerSession = { enabled?: boolean; tile?: boolean; style?: string; count?: number; deep?: boolean; autoSend?: boolean }
 type ReplyTarget = { targetKey: string; quote: string; createTime: number }
 type PendingGenerate = { sessionName: string; settings: PerSession; targetKey: string; quote: string }
 type ReplaceSuggestionTarget = { batchId: string; suggestionIndex: number }
@@ -493,7 +494,12 @@ class ReplyTileService {
     this.emitState(sessionId, sessionName, 'loading')
     try {
       const style = VALID_STYLES.has(String(settings.style)) ? String(settings.style) : 'natural'
-      const count = [1, 2, 3, 4, 5].includes(Number(settings.count)) ? Number(settings.count) : 3
+      // 全自动是会话级开关：谁开了谁自动回，不是一刀切
+      const autoSend = settings.autoSend === true
+      // 全自动时只生成 1 条：没人挑选，多生成的几条纯属浪费 token
+      const count = autoSend
+        ? 1
+        : ([1, 2, 3, 4, 5].includes(Number(settings.count)) ? Number(settings.count) : 3)
       const deep = settings.deep === true
       const take = deep ? 120 : 30
 
@@ -588,6 +594,7 @@ class ReplyTileService {
         return
       }
       if (result.suggestions?.length) {
+        let newBatchId: string | undefined
         if (options?.replace) {
           const replacement = result.suggestions[0]
           this.batches.set(sessionId, (this.batches.get(sessionId) || []).map((batch) => {
@@ -606,9 +613,14 @@ class ReplyTileService {
             quote,
             suggestions: result.suggestions,
           }
+          newBatchId = batch.id
           this.batches.set(sessionId, [...(this.batches.get(sessionId) || []), batch])
         }
         this.emitState(sessionId, sessionName, 'ready')
+        // 全自动：新建议直接进发送队列。replace 是人工点「重试」得来的，不该自动发出去
+        if (!options?.replace && autoSend) {
+          autoReplyService.enqueue(sessionId, sessionName, result.suggestions[0], newBatchId)
+        }
       } else {
         this.emitState(sessionId, sessionName, this.batches.get(sessionId)?.length ? 'ready' : 'pending')
       }

@@ -42,9 +42,14 @@ const result = spawnSync(
 )
 
 // 构建阶段只要求安装包产物存在，自动更新元数据交给后续发布阶段校验。
-const artifactName = target === 'mac'
-  ? `release/CipherTalk-${pkg.version}-Setup.dmg`
-  : `release/CipherTalk-${pkg.version}-Setup.exe`
-if (!fs.existsSync(path.join(__dirname, '..', artifactName))) {
+const artifactNames = target === 'mac'
+  ? [
+      `release/CipherTalk-${pkg.version}-Setup.dmg`,
+      `release/CipherTalk-${pkg.version}-Setup.zip`
+    ]
+  : [`release/CipherTalk-${pkg.version}-Setup.exe`]
+const missingArtifacts = artifactNames.filter((artifactName) => !fs.existsSync(path.join(__dirname, '..', artifactName)))
+if (missingArtifacts.length > 0) {
+  console.error(`缺少构建产物: ${missingArtifacts.join(', ')}`)
   process.exit(result.status || 1)
 }

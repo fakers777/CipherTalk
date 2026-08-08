@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { BaseAIProvider, type ProviderKind } from './base'
 import { getAppPath, getUserDataPath, isElectronPackaged } from '../../runtimePaths'
+import { createProxyFetch, getResolvedProxyUrl } from '../proxyFetch'
 import { getCodexSubscriptionAuthPath, CODEX_SUBSCRIPTION_DUMMY_API_KEY } from '../codexSubscriptionAuth'
 
 export type AIProviderProtocol = ProviderKind
@@ -160,13 +161,19 @@ const PROVIDER_ID_ALIASES: Record<string, string> = {
   'custom-responses': 'openai'
 }
 let modelsDevCache: { updatedAt: number; data: any } | null = null
-const MODELS_DEV_CACHE_MS = 1000 * 60 * 5
+const MODELS_DEV_CACHE_MS = 1000 * 60 * 60 * 6
 const MODELS_DEV_SOURCE = process.env.CIPHERTALK_MODELS_URL || 'https://models.dev'
+// 国内直连 models.dev 必失败，没挂代理的用户只能靠自家 R2 镜像（域名国内可达，api.json 和 logo 都由
+// 发版流水线上传，见 .github/workflows/release.yml 的 mirror-r2）。自建了主源又没指定镜像的，就只认主源。
+const MODELS_DEV_MIRROR_BASE = (process.env.CIPHERTALK_MODELS_MIRROR_BASE
+  ?? (process.env.CIPHERTALK_MODELS_URL ? '' : 'https://miyuapp.aiqji.com')).replace(/\/+$/, '')
+const MODELS_DEV_MIRROR_URL = MODELS_DEV_MIRROR_BASE ? `${MODELS_DEV_MIRROR_BASE}/models-dev.json` : ''
 const MODELS_DEV_CACHE_PATH = process.env.CIPHERTALK_MODELS_PATH || path.join(
   getUserDataPath(),
   MODELS_DEV_SOURCE === 'https://models.dev' ? 'models-dev.json' : `models-dev-${Buffer.from(MODELS_DEV_SOURCE).toString('hex').slice(0, 16)}.json`
 )
 let modelsDevFetchPromise: Promise<any> | null = null
+let modelsDevRefreshAttemptAt = 0
 
 function toMetadata(provider: Omit<AIProviderMetadata, 'models' | 'modelDetails' | 'pricing' | 'pricingDetail'>, modelDetails: AIModelInfo[] = [], pricing = EMPTY_PRICING): AIProviderMetadata {
   return {
@@ -280,6 +287,7 @@ function getModelsDevProviderBaseURL(provider: any): string {
 }
 
 function getModelsDevProviderLogo(providerId: string): string {
+  // 渲染端优先用随包的 logo 快照，这个地址只在快照缺该 provider 时兜底（国内没代理会拉不到）
   return `${MODELS_DEV_SOURCE.replace(/\/+$/, '')}/logos/${providerId}.svg`
 }
 
@@ -311,21 +319,42 @@ function buildModelsDevProviderMetadata(
   )
 }
 
-async function fetchModelsDevData(): Promise<any> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10000)
+// models.dev 在国内被 DNS 污染 + SNI 阻断（拿真实 Cloudflare IP 直连一样握手就被 RST），直连必失败。
+// 别处的 AI 请求早就走 createProxyFetch 了，只有这里还是裸 fetch —— 用户挂了梯子也更新不到模型目录。
+function getModelsDevFetch(): typeof globalThis.fetch {
   try {
-    const response = await fetch(`${MODELS_DEV_SOURCE.replace(/\/+$/, '')}/api.json`, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'CipherTalk' }
-    })
-    if (!response.ok) {
-      throw new Error(`models.dev 请求失败: ${response.status}`)
-    }
-    return await response.json()
-  } finally {
-    clearTimeout(timeout)
+    return createProxyFetch(getResolvedProxyUrl()) || fetch
+  } catch {
+    return fetch // 读不到代理配置（比如 config 还没就绪）就直连，行为跟以前一致
   }
+}
+
+async function fetchModelsDevData(): Promise<any> {
+  const fetchImpl = getModelsDevFetch()
+  const urls = [`${MODELS_DEV_SOURCE.replace(/\/+$/, '')}/api.json`, MODELS_DEV_MIRROR_URL].filter(Boolean)
+  let lastError: unknown = new Error('没有可用的 models.dev 源')
+
+  for (const url of urls) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+    try {
+      const response = await fetchImpl(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'CipherTalk' }
+      })
+      if (!response.ok) {
+        throw new Error(`请求失败: ${response.status}`)
+      }
+      return await response.json()
+    } catch (error) {
+      lastError = error
+      console.warn(`[AIProviderCatalog] 源不可用，换下一个: ${url}`, error instanceof Error ? error.message : String(error))
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  throw lastError
 }
 
 async function fetchAndCacheModelsDevData(): Promise<any> {
@@ -344,47 +373,37 @@ async function fetchAndCacheModelsDevData(): Promise<any> {
   return modelsDevFetchPromise
 }
 
+// 过期不阻塞：本地有数据（内存/磁盘/内置快照）就先返回，联网刷新丢到后台。
+// models.dev 在国内网络下常常直接超时（10s），以前这 10s 是顶在"AI 接入"等页面打开路径上的。
 async function getModelsDevData(): Promise<any> {
   const now = Date.now()
   if (modelsDevCache && now - modelsDevCache.updatedAt < MODELS_DEV_CACHE_MS) {
     return modelsDevCache.data
   }
 
-  const diskCache = readModelsDevCacheFile()
-  if (diskCache && now - diskCache.updatedAt < MODELS_DEV_CACHE_MS) {
-    modelsDevCache = diskCache
-    return diskCache.data
+  if (!modelsDevCache) {
+    const diskCache = readModelsDevCacheFile()
+    if (diskCache) modelsDevCache = diskCache
   }
 
-  if (process.env.CIPHERTALK_DISABLE_MODELS_FETCH === '1') {
-    if (diskCache) {
-      modelsDevCache = diskCache
-      return diskCache.data
+  const offlineOnly = process.env.CIPHERTALK_DISABLE_MODELS_FETCH === '1'
+  const stale = modelsDevCache?.data ?? readBundledModelsDevData()
+  if (stale) {
+    // 内置快照没有真实时间，按"最旧"记，后台刷新成功后会被覆盖
+    if (!modelsDevCache) modelsDevCache = { updatedAt: 0, data: stale }
+    if (!offlineOnly && now - modelsDevRefreshAttemptAt >= MODELS_DEV_CACHE_MS) {
+      modelsDevRefreshAttemptAt = now
+      void fetchAndCacheModelsDevData().catch((error) => {
+        console.warn('[AIProviderCatalog] models.dev 后台刷新失败，继续用本地数据:', error instanceof Error ? error.message : String(error))
+      })
     }
-    const bundled = readBundledModelsDevData()
-    if (bundled) {
-      modelsDevCache = { updatedAt: now, data: bundled }
-      return bundled
-    }
-    return {}
+    return stale
   }
 
-  try {
-    return await fetchAndCacheModelsDevData()
-  } catch (error) {
-    if (diskCache) {
-      console.warn('[AIProviderCatalog] models.dev 在线获取失败，使用本地缓存:', error instanceof Error ? error.message : String(error))
-      modelsDevCache = diskCache
-      return diskCache.data
-    }
-    const bundled = readBundledModelsDevData()
-    if (bundled) {
-      console.warn('[AIProviderCatalog] models.dev 在线获取失败，使用内置快照:', error instanceof Error ? error.message : String(error))
-      modelsDevCache = { updatedAt: now, data: bundled }
-      return bundled
-    }
-    throw error
-  }
+  // 本地什么都没有（首装 + 快照缺失）才只能等网络
+  if (offlineOnly) return {}
+  modelsDevRefreshAttemptAt = now
+  return await fetchAndCacheModelsDevData()
 }
 
 export async function refreshModelsDevCache(force = false): Promise<void> {

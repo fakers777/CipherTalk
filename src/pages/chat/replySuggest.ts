@@ -14,6 +14,8 @@ export type ReplySuggestSettings = {
   deep: boolean
   /** 磁贴窗口：把建议贴到微信主窗口旁的独立窗口显示 */
   tile: boolean
+  /** 全自动回复：建议就绪后排队倒计时自动发进微信，逐句发送并查库校验（见 autoReplyService） */
+  autoSend: boolean
 }
 
 export const REPLY_SUGGEST_CONFIG_KEY = 'replySuggestSessions'
@@ -35,6 +37,7 @@ export const DEFAULT_REPLY_SUGGEST_SETTINGS: ReplySuggestSettings = {
   count: 3,
   deep: false,
   tile: false,
+  autoSend: false,
 }
 
 type SettingsMap = Record<string, Partial<ReplySuggestSettings> | undefined>
@@ -48,6 +51,7 @@ export function normalizeReplySuggestSettings(raw: Partial<ReplySuggestSettings>
     count: REPLY_SUGGEST_COUNTS.includes(Number(raw?.count)) ? Number(raw?.count) : DEFAULT_REPLY_SUGGEST_SETTINGS.count,
     deep: raw?.deep === true,
     tile: raw?.tile === true,
+    autoSend: raw?.autoSend === true,
   }
 }
 
@@ -182,14 +186,7 @@ export function buildFriendPersonaContext(persona: PersonaRecordInfo): string {
   return lines.join('\n')
 }
 
-/** 连发建议的分隔符：与画像语料里的连发分隔约定一致，模型按此拆条。 */
-export const SUGGEST_BURST_JOINER = '／'
-
-/** 把一条建议按连发分隔符拆成若干短句（无分隔符时返回单元素数组）。 */
-export function splitSuggestionBursts(text: string): string[] {
-  const segs = text.split(SUGGEST_BURST_JOINER).map((t) => t.trim()).filter(Boolean)
-  return segs.length > 0 ? segs : [text.trim()]
-}
+export { SUGGEST_BURST_JOINER, splitSuggestionBursts } from './replySuggestBurst'
 
 const SENTENCE_SEGMENT_LABELS = ['第一句', '第二句', '第三句', '第四句', '第五句', '第六句', '第七句', '第八句', '第九句', '第十句']
 

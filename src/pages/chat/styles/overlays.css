@@ -102,8 +102,9 @@
   border-radius: 8px;
   overflow: hidden;
 }
-.video-thumb-wrapper:hover .video-play-button {
-  transform: translate(-50%, -50%) scale(1.1);
+.video-thumb-wrapper .video-play-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%) scale(1.06);
 }
 .video-thumb-wrapper .video-thumb,
 .video-thumb-wrapper .video-cover {
@@ -131,12 +132,37 @@
   position: absolute;
   top: 50%;
   left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(3px) saturate(180%);
+  -webkit-backdrop-filter: blur(1px) saturate(180%);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.22),
+    inset 0 -6px 14px rgba(0, 0, 0, 0.12);
   transform: translate(-50%, -50%);
   transition: all 0.2s ease;
 }
+.chat-video-glass-ready .video-thumb-wrapper .video-play-button {
+  backdrop-filter: url(#chat-video-glass-48) blur(1px) brightness(1.06) saturate(1.5);
+  -webkit-backdrop-filter: url(#chat-video-glass-48) blur(1px) brightness(1.06) saturate(1.5);
+}
+.chat-video-glass-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
 .video-thumb-wrapper .video-play-button svg {
-  color: white;
-  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
+  color: #fff;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.55));
 }
 .video-thumb-wrapper .video-duration-tag {
   position: absolute;

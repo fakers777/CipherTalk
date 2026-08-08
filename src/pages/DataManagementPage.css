@@ -313,7 +313,7 @@
 .image-decrypt-info svg {
   margin-bottom: 20px;
   opacity: 0.6;
-  color: var(--primary-color);
+  color: var(--primary);
 }
 .image-decrypt-info p {
   margin: 0;

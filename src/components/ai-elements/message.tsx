@@ -74,7 +74,8 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit max-w-full min-w-0 flex-col gap-2 overflow-hidden text-sm",
+      // 聊天正文用 18px：长文阅读更舒适，且只动消息区，不靠全局 Cmd+/- 撑开整页 UI
+      "is-user:dark flex w-fit max-w-full min-w-0 flex-col gap-2 overflow-hidden text-[18px] leading-7",
       "group-[.is-user]:ml-auto group-[.is-user]:rounded-(--agent-radius,12px) group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:text-foreground",
       className

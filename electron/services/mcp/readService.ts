@@ -1431,13 +1431,36 @@ async function toMcpMemorySearchHit(hit: RetrievalHit, options: MessageNormalize
   }
 }
 
+const SESSION_CATALOG_PAGE_SIZE = 1000 // 后端单页上限
+const SESSION_CATALOG_MAX_PAGES = 50
+// ponytail: 60s TTL 就够，会话列表不是强实时数据；要更准再挂 dbChange 清缓存
+const SESSION_CATALOG_TTL = 60_000
+let sessionCatalogCache: { at: number; value: { items: McpSessionItem[]; map: Map<string, McpSessionRef> } } | null = null
+
 async function getSessionCatalog(): Promise<{ items: McpSessionItem[]; map: Map<string, McpSessionRef> }> {
-  const result = await chatService.getSessions()
-  if (!result.success) {
-    mapChatError(result.error)
+  if (sessionCatalogCache && Date.now() - sessionCatalogCache.at < SESSION_CATALOG_TTL) {
+    return sessionCatalogCache.value
   }
 
-  const items = (result.sessions || [])
+  // 必须翻页取全量：getSessions 不传参只给最近 300 条，很久没聊 / 已被删好友的历史会话
+  // 会落在窗口外，导致所有按名字或 ID 解析会话的 MCP 工具报 SESSION_NOT_FOUND
+  const rawSessions: ChatSession[] = []
+  const seen = new Set<string>()
+  for (let page = 0; page < SESSION_CATALOG_MAX_PAGES; page++) {
+    const result = await chatService.getSessions(page * SESSION_CATALOG_PAGE_SIZE, SESSION_CATALOG_PAGE_SIZE)
+    if (!result.success) {
+      if (page === 0) mapChatError(result.error)
+      break
+    }
+    for (const session of result.sessions || []) {
+      if (seen.has(session.username)) continue
+      seen.add(session.username)
+      rawSessions.push(session)
+    }
+    if (!result.hasMore) break
+  }
+
+  const items = rawSessions
     .map((session) => toSessionItem(session))
     .sort((a, b) => b.lastTimestamp - a.lastTimestamp || a.displayName.localeCompare(b.displayName, 'zh-CN'))
 
@@ -1450,7 +1473,9 @@ async function getSessionCatalog(): Promise<{ items: McpSessionItem[]; map: Map<
     })
   }
 
-  return { items, map }
+  const value = { items, map }
+  sessionCatalogCache = { at: Date.now(), value }
+  return value
 }
 
 function messageMatchesFilters(

@@ -44,6 +44,20 @@ export default function ChatExportPanel({ chat, shared }: ChatExportPanelProps) 
   const setOption = <K extends keyof ExportOptions>(key: K, value: ExportOptions[K]) =>
     setOptions(prev => ({ ...prev, [key]: value }))
 
+  // 全选只作用于当前筛选结果，且与逐项勾选共用同一个 Set：
+  // 全选后仍可单独取消某几个，被搜索/分类隐藏的已选项也不会被清掉
+  const visibleUsernames = filteredSessions.map(s => s.username)
+  const allVisibleSelected = visibleUsernames.length > 0 && visibleUsernames.every(u => selectedSessions.has(u))
+
+  const toggleSelectAll = () => {
+    const next = new Set(selectedSessions)
+    for (const username of visibleUsernames) {
+      if (allVisibleSelected) next.delete(username)
+      else next.add(username)
+    }
+    setSelectedSessions(next)
+  }
+
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-[360px_minmax(0,1fr)]">
       {/* 左侧：会话预览 */}
@@ -55,9 +69,19 @@ export default function ChatExportPanel({ chat, shared }: ChatExportPanelProps) 
               <Chip variant="secondary" size="sm">已选 {selectedSessions.size}</Chip>
             )}
           </div>
-          <Button isIconOnly variant="tertiary" size="sm" isDisabled={isLoading} onPress={loadSessions}>
-            <ArrowsRotateLeft width={16} height={16} className={isLoading ? 'animate-spin' : ''} />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="tertiary"
+              size="sm"
+              isDisabled={isLoading || visibleUsernames.length === 0}
+              onPress={toggleSelectAll}
+            >
+              {allVisibleSelected ? '取消全选' : '全选'}
+            </Button>
+            <Button isIconOnly variant="tertiary" size="sm" isDisabled={isLoading} onPress={loadSessions}>
+              <ArrowsRotateLeft width={16} height={16} className={isLoading ? 'animate-spin' : ''} />
+            </Button>
+          </div>
         </div>
 
         <ExportSearchBar
@@ -80,14 +104,15 @@ export default function ChatExportPanel({ chat, shared }: ChatExportPanelProps) 
           </Tabs.ListContainer>
         </Tabs>
 
-        <ScrollShadow hideScrollBar className="min-h-0 flex-1" size={32}>
+        {/* 虚拟列表自带滚动容器，不能再套 ScrollShadow */}
+        <div className="min-h-0 flex-1 overflow-hidden">
           <SessionList
             isLoading={isLoading}
             sessions={filteredSessions}
             selectedSessions={selectedSessions}
             onSelectionChange={setSelectedSessions}
           />
-        </ScrollShadow>
+        </div>
       </div>
 
       {/* 右侧：导出设置 */}

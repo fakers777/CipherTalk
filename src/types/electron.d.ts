@@ -25,6 +25,13 @@ import type {
 } from './relayOne'
 import type { AgentReasoningEffort } from '../features/aiagent/transport/ipcChatTransport'
 
+/** 全自动回复队列的状态推送，与 electron/services/autoReplyService.ts 的 AutoSendStatus 对应。 */
+export type ReplyTileAutoStatus =
+  | { phase: 'idle' }
+  | { phase: 'counting'; sessionId: string; sessionName: string; secondsLeft: number; queued: number }
+  | { phase: 'sending'; sessionId: string; sessionName: string; segIndex: number; segTotal: number; queued: number }
+  | { phase: 'halted'; sessionId: string; sessionName: string; error: string }
+
 export interface EmbeddingConfig {
   enabled: boolean
   provider: string
@@ -191,8 +198,8 @@ export interface AgentCanvasRefData {
   action: 'created' | 'updated' | 'renamed' | 'restored'
 }
 
-export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
-export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen' | 'stepfun'
+export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
 
 export interface TtsProviderConfig {
   protocol: TtsProtocol
@@ -648,6 +655,7 @@ export interface ElectronAPI {
     focusMainWindow: (route?: string) => Promise<boolean>
     openMomentsWindow: (filterUsername?: string) => Promise<boolean>
     openPersonaChatWindow: (sessionId: string) => Promise<boolean>
+    openChatSummaryWindow: (sessionId: string, displayName: string, range: string) => Promise<boolean>
     openPosterStyleWindow: () => Promise<boolean>
     onMomentsFilterUser: (callback: (username: string) => void) => () => void
     onNavigate: (callback: (route: string) => void) => () => void
@@ -679,6 +687,12 @@ export interface ElectronAPI {
       continue: (sessionId: string) => void
       skip: (sessionId: string) => void
       retry: (payload: { sessionId: string; batchId: string; suggestionIndex: number }) => void
+      fill: (payload: { text: string; searchName?: string }) => Promise<{ ok: boolean; reason?: string }>
+      commit: () => Promise<{ ok: boolean; reason?: string }>
+      autoCancel: () => void
+      autoClear: () => void
+      autoResume: () => void
+      onAutoStatus: (callback: (status: ReplyTileAutoStatus) => void) => () => void
       onUpdate: (callback: (entry: { sessionId: string; sessionName: string; avatarUrl?: string; state: 'pending' | 'loading' | 'error' | 'ready' | 'gone'; suggestions?: string[]; batches?: Array<{ id: string; targetKey: string; quote: string; suggestions: string[] }>; pendingContinue?: boolean; error?: string }) => void) => () => void
       onContinue: (callback: (sessionId: string) => void) => () => void
       onSkip: (callback: (sessionId: string) => void) => () => void
@@ -966,7 +980,7 @@ export interface ElectronAPI {
     killWeChat: () => Promise<boolean>
     launchWeChat: () => Promise<boolean>
     waitForWindow: (maxWaitSeconds?: number) => Promise<boolean>
-    startGetKey: (customWechatPath?: string, dbPath?: string) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean; needAdmin?: boolean; validatedWxid?: string; account?: { dbKey: string | null; wxid: string; name: string; number: string; phone: string; seed: number } | null }>
+    startGetKey: (customWechatPath?: string, dbPath?: string, options?: { allowRestart?: boolean; forceRestart?: boolean }) => Promise<{ success: boolean; key?: string; error?: string; needManualPath?: boolean; needAdmin?: boolean; needRestart?: boolean; validatedWxid?: string; account?: { dbKey: string | null; wxid: string; name: string; number: string; phone: string; seed: number } | null }>
     cancel: () => Promise<boolean>
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => Promise<{ wxid: string; dbPath: string } | null>
     onStatus: (callback: (data: { status: string; level: number }) => void) => () => void
@@ -1266,6 +1280,11 @@ export interface ElectronAPI {
   }
   // 朋友圈相关
   sns: {
+    getCover: () => Promise<{
+      success: boolean
+      dataUrl?: string
+      error?: string
+    }>
     getTimeline: (limit?: number, offset?: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number) => Promise<{
       success: boolean
       timeline?: Array<{
@@ -1635,6 +1654,13 @@ export interface ElectronAPI {
     listConversations: (scope?: unknown) => Promise<{ success: boolean; conversations?: unknown[]; error?: string }>
     loadConversation: (id: number) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
     createConversation: (payload: unknown) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
+    /** 聊天摘要缓存：同会话+时间范围只存最新一份，重新生成即覆盖 */
+    getChatSummary: (payload: { sessionId: string; range: string }) => Promise<{
+      success: boolean
+      summary?: { sessionId: string; rangeKey: string; displayName: string; content: string; createdAt: number; updatedAt: number } | null
+      error?: string
+    }>
+    saveChatSummary: (payload: { sessionId: string; range: string; displayName?: string; content: string }) => Promise<{ success: boolean; error?: string }>
     deleteConversation: (idOrPayload: number | { id?: number; originClientId?: string | null }) => Promise<{ success: boolean; error?: string }>
     deleteConversationsByScope: (scope: unknown) => Promise<{ success: boolean; deleted?: number; error?: string }>
     renameConversation: (id: number, title: string, originClientId?: string | null) => Promise<{ success: boolean; conversation?: unknown; error?: string }>
@@ -1705,7 +1731,7 @@ export interface ElectronAPI {
     deleteBankNote: (kind: MemoryBankNoteKind, fileName: string) => Promise<{ success: boolean; error?: string }>
     readDiary: (date: string) => Promise<{ success: boolean; diary?: MemoryDiaryEntryInfo; error?: string }>
     deleteDiary: (date: string) => Promise<{ success: boolean; error?: string }>
-    summarizeTodayDiary: () => Promise<{ success: boolean; alreadyExists?: boolean; diary?: MemoryDiaryEntryInfo; error?: string }>
+    summarizeTodayDiary: () => Promise<{ success: boolean; diary?: MemoryDiaryEntryInfo; error?: string }>
     create: (payload: { memoryUid?: string; sourceType?: AgentMemorySourceType; content?: string; title?: string; importance?: number; confidence?: number; tags?: string[] }) => Promise<{ success: boolean; item?: AgentMemoryItem; error?: string }>
     delete: (id: number) => Promise<{ success: boolean; error?: string }>
     update: (payload: { id: number; sourceType?: AgentMemorySourceType; content?: string; importance?: number; confidence?: number; tags?: string[] }) => Promise<{ success: boolean; item?: AgentMemoryItem; error?: string }>
@@ -1813,6 +1839,8 @@ export interface ElectronAPI {
     createPaymentOrder: (input: RelayOneCreatePaymentOrderInput) => Promise<RelayOneIpcResult<RelayOnePaymentOrder>>
     getPaymentOrder: (orderId: string) => Promise<RelayOneIpcResult<RelayOnePaymentOrder>>
     cancelPaymentOrder: (orderId: string) => Promise<RelayOneIpcResult<RelayOnePaymentOrder>>
+    openPaymentWindow: (url: string) => Promise<RelayOneIpcResult<void>>
+    closePaymentWindow: () => Promise<RelayOneIpcResult<void>>
     onStatusChanged: (callback: (status: RelayOneStatus) => void) => () => void
     onProviderApplied: (callback: () => void) => () => void
   }

@@ -42,7 +42,7 @@ async function handleMessage(msg: any) {
     let result: any
     switch (type) {
       case 'setPaths':
-        core.setPaths(payload.resourcesPath, payload.userDataPath)
+        core.setPaths(payload.resourcesPath, payload.userDataPath, payload.appVersion)
         result = { success: true }
         break
       case 'testConnection':

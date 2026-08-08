@@ -1,11 +1,13 @@
 import { ConfigService } from './config'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import crypto from 'crypto'
 import zlib from 'zlib'
 import { chatService } from './chatService'
+import { cleanAccountDirName } from './chat/accountUtils'
 import { dbAdapter } from './dbAdapter'
+import { getDbStoragePath } from './dbStoragePaths'
 import { wcdbService } from './wcdbService'
 import { WasmService } from './wasmService'
 import { Isaac64 } from './isaac64'
@@ -93,6 +95,12 @@ export interface SnsPost {
     likes: string[]
     comments: SnsComment[]
     rawXml?: string
+}
+
+export interface SnsCoverResult {
+    success: boolean
+    dataUrl?: string
+    error?: string
 }
 
 type SnsTimelineRow = Partial<Omit<SnsPost, 'createTime' | 'type'>> & {
@@ -303,6 +311,10 @@ const extractShareInfo = (xml: string): SnsShareInfo | undefined => {
 class SnsService {
     private configService: ConfigService
     private imageCache = new Map<string, string>()
+    // 头图按解析出的缓存文件路径记忆：换了头图 → 数据库里的 id 变 → 路径变 → 自动失效
+    private coverCache: { filePath: string; result: SnsCoverResult } | null = null
+    // 全目录读盘 + 哈希的兜底扫描，进程内只做一次
+    private coverScanCache: SnsCoverResult | null = null
 
     constructor() {
         this.configService = new ConfigService()
@@ -1186,6 +1198,181 @@ class SnsService {
         const hash = md5 || crypto.createHash('md5').update(url).digest('hex')
         const ext = isVideoUrl(url) ? '.mp4' : '.jpg'
         return join(this.getSnsCacheDir(), `${hash}${ext}`)
+    }
+
+    private getSnsBackgroundDir(): string | null {
+        const dbStoragePath = getDbStoragePath()
+        if (!dbStoragePath) return null
+
+        const backgroundDir = join(dirname(dbStoragePath), 'business', 'sns', 'bkg')
+        return existsSync(backgroundDir) ? backgroundDir : null
+    }
+
+    private getBackgroundCachePath(backgroundDir: string, cacheKey: string): string | null {
+        const normalizedKey = cacheKey.trim().toLowerCase()
+        if (!/^[a-f0-9]{32}$/.test(normalizedKey)) return null
+
+        const filePath = join(backgroundDir, normalizedKey.slice(0, 2), normalizedKey.slice(2))
+        return existsSync(filePath) ? filePath : null
+    }
+
+    private addBackgroundValueCandidates(value: unknown, candidates: Set<string>): void {
+        if (value === null || value === undefined) return
+
+        let text = String(value).trim()
+        if (!text) return
+
+        // WCDB 把 BLOB 返回为十六进制字符串。先还原其中可能存在的 URL / 图片 ID。
+        if (/^[a-f0-9]+$/i.test(text) && text.length >= 16 && text.length % 2 === 0) {
+            try {
+                text += `\n${Buffer.from(text, 'hex').toString('utf8')}`
+            } catch {
+                // 保留原始文本继续提取。
+            }
+        }
+
+        const values = text.match(/https?:\/\/[^\s\0"'<>]+|[a-z0-9_:/?&=.%+-]{8,}/gi) || []
+        for (const rawValue of values) {
+            const candidate = rawValue.trim()
+            if (!candidate) continue
+            if (/^[a-f0-9]{32}$/i.test(candidate)) candidates.add(candidate.toLowerCase())
+            candidates.add(crypto.createHash('md5').update(candidate).digest('hex'))
+        }
+    }
+
+    private async getBackgroundCacheKeys(): Promise<string[]> {
+        const configuredWxid = String(this.configService.get('myWxid') || '').trim()
+        if (!configuredWxid) return []
+
+        try {
+            const columns = await dbAdapter.all<{ name: string }>('contact', '', 'PRAGMA table_info(contact)')
+            const relevantColumns = columns
+                .map((column) => column.name)
+                .filter((name) => {
+                    const normalized = name.replace(/_/g, '').toLowerCase()
+                    return normalized === 'snsbgimgid'
+                        || normalized === 'snsbgobjectid'
+                        || normalized === 'albumbgimgid'
+                        || normalized === 'malbumbgimgid'
+                        || normalized === 'snsuserinfo'
+                        || normalized === 'extrabuffer'
+                })
+
+            if (relevantColumns.length === 0) return []
+
+            const cleanedWxid = cleanAccountDirName(configuredWxid)
+            const selectColumns = relevantColumns
+                .map((name) => `"${name.replace(/"/g, '""')}"`)
+                .join(', ')
+            const row = await dbAdapter.get<Record<string, unknown>>(
+                'contact',
+                '',
+                `SELECT ${selectColumns} FROM contact WHERE username IN (?, ?) LIMIT 1`,
+                [configuredWxid, cleanedWxid]
+            )
+            if (!row) return []
+
+            const candidates = new Set<string>()
+            for (const value of Object.values(row)) {
+                this.addBackgroundValueCandidates(value, candidates)
+            }
+            return Array.from(candidates)
+        } catch (error) {
+            console.warn('[SnsService] 读取朋友圈头图标识失败，尝试缓存兜底:', error)
+            return []
+        }
+    }
+
+    private async readBackgroundImage(filePath: string): Promise<{ dataUrl: string; contentHash: string } | null> {
+        try {
+            const data = await readFile(filePath)
+            const mimeType = detectImageMime(data, '')
+            if (!mimeType.startsWith('image/')) return null
+            return {
+                dataUrl: `data:${mimeType};base64,${data.toString('base64')}`,
+                contentHash: crypto.createHash('sha256').update(data).digest('hex')
+            }
+        } catch {
+            return null
+        }
+    }
+
+    private async findRepeatedBackground(backgroundDir: string): Promise<string | null> {
+        const files: Array<{ filePath: string; modifiedAt: number }> = []
+
+        try {
+            for (const prefixEntry of readdirSync(backgroundDir, { withFileTypes: true })) {
+                if (!prefixEntry.isDirectory() || !/^[a-f0-9]{2}$/i.test(prefixEntry.name)) continue
+                const prefixDir = join(backgroundDir, prefixEntry.name)
+                for (const fileEntry of readdirSync(prefixDir, { withFileTypes: true })) {
+                    if (!fileEntry.isFile() || !/^[a-f0-9]{30}$/i.test(fileEntry.name)) continue
+                    const filePath = join(prefixDir, fileEntry.name)
+                    files.push({ filePath, modifiedAt: statSync(filePath).mtimeMs })
+                }
+            }
+        } catch {
+            return null
+        }
+
+        const groups = new Map<string, Array<{ dataUrl: string; modifiedAt: number }>>()
+        for (const file of files) {
+            const image = await this.readBackgroundImage(file.filePath)
+            if (!image) continue
+            const group = groups.get(image.contentHash) || []
+            group.push({ dataUrl: image.dataUrl, modifiedAt: file.modifiedAt })
+            groups.set(image.contentHash, group)
+        }
+
+        // 普通好友头图也可能产生即时的双缓存。只有跨时段重复命中的图片才作为本人头图兜底。
+        const repeatedGroups = Array.from(groups.values())
+            .filter((group) => group.length >= 2)
+            .map((group) => {
+                const times = group.map((item) => item.modifiedAt)
+                return {
+                    group,
+                    span: Math.max(...times) - Math.min(...times),
+                    latest: Math.max(...times)
+                }
+            })
+            .filter((item) => item.span >= 60 * 60 * 1000)
+            .sort((a, b) => b.span - a.span || b.latest - a.latest)
+
+        return repeatedGroups[0]?.group[0]?.dataUrl || null
+    }
+
+    clearCoverCache(): void {
+        this.coverCache = null
+        this.coverScanCache = null
+    }
+
+    async getCover(): Promise<SnsCoverResult> {
+        const backgroundDir = this.getSnsBackgroundDir()
+        if (!backgroundDir) return { success: true }
+
+        // 主路径每次都跑：一次 PRAGMA + 一次 SELECT，换了头图能立刻反映出来。
+        // 只有真正要读盘 + base64 的那一步才吃缓存。
+        for (const cacheKey of await this.getBackgroundCacheKeys()) {
+            const filePath = this.getBackgroundCachePath(backgroundDir, cacheKey)
+            if (!filePath) continue
+            if (this.coverCache?.filePath === filePath) return this.coverCache.result
+
+            const image = await this.readBackgroundImage(filePath)
+            if (image) {
+                const result: SnsCoverResult = { success: true, dataUrl: image.dataUrl }
+                this.coverCache = { filePath, result }
+                return result
+            }
+        }
+
+        // 兜底扫描要读遍整个 bkg 目录并逐个哈希，且结果是确定性的，一个进程内算一次就够。
+        // 「没扫到」同样要缓存 —— 没扫到才是最贵的那条路。
+        if (!this.coverScanCache) {
+            const repeatedBackground = await this.findRepeatedBackground(backgroundDir)
+            this.coverScanCache = repeatedBackground
+                ? { success: true, dataUrl: repeatedBackground }
+                : { success: true }
+        }
+        return this.coverScanCache
     }
 
     private normalizeMedia(media: SnsMedia[], videoKey?: string): SnsMedia[] {

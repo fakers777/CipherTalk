@@ -11,6 +11,7 @@ import {
   InputGroup,
   Label,
   ListBox,
+  Modal,
   ProgressBar,
   ScrollShadow,
   Spinner,
@@ -77,6 +78,8 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   const [isClosing, setIsClosing] = useState(false)
   const [showWechatPathPrompt, setShowWechatPathPrompt] = useState(false)
   const [customWechatPath, setCustomWechatPath] = useState('')
+  const [showRestartWechatPrompt, setShowRestartWechatPrompt] = useState(false)
+  const [pendingWechatPath, setPendingWechatPath] = useState<string | undefined>()
   const [isDecrypting, setIsDecrypting] = useState(false)
   const [decryptStatus, setDecryptStatus] = useState('')
   const [countdown, setCountdown] = useState(0)
@@ -364,13 +367,20 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
     }
   }
 
-  const handleAutoGetDbKey = async (wechatPath?: string) => {
+  const handleAutoGetDbKey = async (wechatPath?: string, restartConfirmed = false) => {
     if (isFetchingDbKey) return
     setIsFetchingDbKey(true)
     setError('')
     setDbKeyStatus('正在准备获取密钥...')
     try {
-      const result = await window.electronAPI.wxKey.startGetKey(wechatPath, dbPath || undefined)
+      const result = await window.electronAPI.wxKey.startGetKey(
+        wechatPath,
+        dbPath || undefined,
+        {
+          allowRestart: isMac || restartConfirmed,
+          forceRestart: !isMac && restartConfirmed
+        }
+      )
       if (result.success && result.key) {
         setDecryptKey(result.key)
         // 留存内存提取到的账号字段，保存账号时写入档案
@@ -446,7 +456,11 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
           setDbKeyStatus('密钥获取成功，请手动选择并验证账号目录')
         }
       } else {
-        if (result.needManualPath) {
+        if (result.needRestart) {
+          setPendingWechatPath(wechatPath)
+          setShowRestartWechatPrompt(true)
+          setDbKeyStatus('直接读取未成功，等待确认是否重启微信')
+        } else if (result.needManualPath) {
           setShowWechatPathPrompt(true)
           setDbKeyStatus('需要手动选择微信安装位置')
         } else {
@@ -491,7 +505,21 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
       setError('请先选择微信程序')
       return
     }
-    handleAutoGetDbKey(customWechatPath)
+    handleAutoGetDbKey(customWechatPath, true)
+  }
+
+  const handleCancelRestartWechat = () => {
+    setShowRestartWechatPrompt(false)
+    setPendingWechatPath(undefined)
+    setDbKeyStatus('已暂不重启微信，可稍后重试')
+  }
+
+  const handleConfirmRestartWechat = () => {
+    const wechatPath = pendingWechatPath
+    setShowRestartWechatPrompt(false)
+    setPendingWechatPath(undefined)
+    setDbKeyStatus('正在重启微信并重新获取密钥...')
+    void handleAutoGetDbKey(wechatPath, true)
   }
 
   const handleAutoGetImageKey = async () => {
@@ -998,7 +1026,7 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
       {renderStatusAlert(
         isMac
           ? '获取密钥会调用 mac helper，并尝试识别候选账号目录。macOS 可能需要管理员授权。'
-          : '点击自动获取后，程序会自动重启微信并扫描内存获取密钥，请耐心等待；如弹出微信登录请完成登录。',
+          : '程序会先尝试直接读取微信内存；如果未成功，会询问是否重启微信后再次获取。',
         'default'
       )}
     </div>
@@ -1172,6 +1200,37 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
 
   return (
     <div className={rootClassName}>
+      <Modal.Backdrop
+        isOpen={showRestartWechatPrompt}
+        onOpenChange={(open) => {
+          if (!open) handleCancelRestartWechat()
+        }}
+      >
+        <Modal.Container placement="center" size="sm">
+          <Modal.Dialog>
+            <Modal.Header>
+              <Modal.Icon className="bg-warning-soft text-warning-soft-foreground">
+                <ArrowsRotateLeft className="size-5" />
+              </Modal.Icon>
+              <Modal.Heading>需要重启微信继续获取</Modal.Heading>
+            </Modal.Header>
+            <Modal.Body>
+              <p className="text-sm leading-6 text-muted">
+                直接读取微信内存未获取到密钥。继续后，密语会关闭并自动重新启动微信，然后在启动过程中再次尝试获取。
+              </p>
+              <p className="mt-2 text-sm font-medium text-foreground">请先保存微信中正在编辑的内容。</p>
+            </Modal.Body>
+            <Modal.Footer>
+              <Button variant="secondary" onPress={handleCancelRestartWechat}>暂不重启</Button>
+              <Button variant="primary" onPress={handleConfirmRestartWechat}>
+                <ArrowsRotateLeft width={16} height={16} />
+                重启并继续
+              </Button>
+            </Modal.Footer>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+
       {/* 全屏倒计时覆盖层 */}
       {countdown > 0 && (
         <div className="countdown-overlay">

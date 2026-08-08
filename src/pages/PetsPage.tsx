@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Key } from 'react'
+import { useEffect, useMemo, useRef, useState, type Key } from 'react'
 import type { TimeValue } from 'react-aria-components/TimeField'
 import { Button as HeroButton, Calendar as HeroCalendar, DateField, DatePicker, Label, ListBox, Modal, ScrollShadow, Select, Switch, Tabs, TextArea, TextField, TimeField, toast } from '@heroui/react'
 import { ArrowDownToLine, Bell, Calendar as CalendarIcon, Check, CircleDashed, CircleQuestion, Display, FaceRobot, FileZipper, Magnifier, Plus, TrashBin, Volume } from '@gravity-ui/icons'
@@ -130,6 +130,7 @@ export default function PetsPage() {
   const [visibleCount, setVisibleCount] = useState(ONLINE_PAGE_SIZE)
   const [installingSlug, setInstallingSlug] = useState('')
   const [importing, setImporting] = useState(false)
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null)
 
   const loadInstalled = async () => {
     const res = await window.electronAPI.pet.listInstalled()
@@ -180,6 +181,20 @@ export default function PetsPage() {
       return pet.slug.includes(keyword) || pet.displayName.toLowerCase().includes(keyword)
     })
   }, [online, installed, query])
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current
+    if (tab !== 'gallery' || !sentinel || filteredOnline.length <= visibleCount) return
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting) return
+      observer.disconnect()
+      setVisibleCount((count) => Math.min(count + ONLINE_PAGE_SIZE, filteredOnline.length))
+    }, { rootMargin: '320px 0px' })
+
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [filteredOnline.length, tab, visibleCount])
 
   const selectPet = async (slug: string) => {
     await window.electronAPI.config.set('petCurrent', slug)
@@ -404,10 +419,13 @@ export default function PetsPage() {
                   ))}
                 </div>
                 {filteredOnline.length > visibleCount && (
-                  <div className="mt-3 flex justify-center">
-                    <HeroButton className="rounded-full" onPress={() => setVisibleCount((count) => count + ONLINE_PAGE_SIZE)} size="sm" variant="tertiary">
-                      加载更多（还有 {filteredOnline.length - visibleCount} 只）
-                    </HeroButton>
+                  <div
+                    aria-label={`正在加载更多宠物，还有 ${filteredOnline.length - visibleCount} 只`}
+                    className="mt-3 flex h-10 items-center justify-center"
+                    ref={loadMoreSentinelRef}
+                    role="status"
+                  >
+                    <CircleDashed className="size-4 animate-spin text-muted" />
                   </div>
                 )}
               </>

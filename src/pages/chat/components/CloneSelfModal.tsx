@@ -1,4 +1,4 @@
-import { CircleCheck, CircleDashed, CircleExclamation, FaceRobot } from '@gravity-ui/icons'
+import { CircleCheck, CircleDashed, CircleExclamation, FaceRobot, TrashBin } from '@gravity-ui/icons'
 import { useEffect, useState } from 'react'
 import { Button, Label, Modal, ProgressBar } from '@heroui/react'
 import type { ChatSession } from '../../../types/models'
@@ -46,15 +46,21 @@ export function CloneSelfModal({
   isOpen,
   onOpenChange,
   session,
+  exists = false,
 }: {
   isOpen: boolean
   onOpenChange: (open: boolean) => void
   session: ChatSession
+  /** 是否已存在自画像：决定要不要显示删除入口 */
+  exists?: boolean
 }) {
   const [phase, setPhase] = useState<Phase>('confirm')
   const [buildProgress, setBuildProgress] = useState<PersonaBuildProgressInfo | null>(null)
   const [buildError, setBuildError] = useState<string | null>(null)
   const [myAvatarUrl, setMyAvatarUrl] = useState<string | undefined>(undefined)
+  // ponytail: 两段式按钮代替二次确认弹窗，Modal 里再套 AlertDialog 不值当
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const { showTopToast } = useTopToast()
   // 自画像存储键带 self: 前缀；主进程进度事件也用同一前缀的 sessionId 推回
   const progressSessionId = `self:${session.username}`
@@ -65,6 +71,7 @@ export function CloneSelfModal({
       setPhase('confirm')
       setBuildProgress(null)
       setBuildError(null)
+      setConfirmDelete(false)
     }
   }, [isOpen, session.username])
 
@@ -110,6 +117,26 @@ export function CloneSelfModal({
     }
   }
 
+  // 删除自画像：画像、真实问答索引、导演笔记由主进程一并清掉
+  const handleDelete = async () => {
+    setDeleting(true)
+    try {
+      const res = await window.electronAPI.persona.delete(progressSessionId)
+      if (res.success) {
+        showTopToast('自画像已删除')
+        onOpenChange(false)
+      } else {
+        setBuildError(res.error || '删除失败')
+        setConfirmDelete(false)
+      }
+    } catch (e) {
+      setBuildError(e instanceof Error ? e.message : String(e))
+      setConfirmDelete(false)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <Modal.Backdrop
       className="clone-self-backdrop"
@@ -142,10 +169,22 @@ export function CloneSelfModal({
                     <span>{buildError}</span>
                   </div>
                 )}
-                <Button onPress={handleBuild}>
-                  <FaceRobot className="size-4" />
-                  开始克隆
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button onPress={handleBuild} isDisabled={deleting}>
+                    <FaceRobot className="size-4" />
+                    {exists ? '重新克隆' : '开始克隆'}
+                  </Button>
+                  {exists && (
+                    <Button
+                      variant={confirmDelete ? 'danger' : 'ghost'}
+                      isDisabled={deleting}
+                      onPress={() => { if (confirmDelete) void handleDelete(); else setConfirmDelete(true) }}
+                    >
+                      <TrashBin className="size-4" />
+                      {confirmDelete ? '确认删除' : '删除自画像'}
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
 

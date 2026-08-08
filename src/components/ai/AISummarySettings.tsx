@@ -278,32 +278,43 @@ function ProviderOptionContent({ providerInfo }: { providerInfo: AIProviderInfo 
   )
 }
 
+/** 同首页「开发者愿景」的做法：整屏模糊遮罩 + 内容直接铺在上面，不套卡片，整层滚动。 */
 function GuideModal({ title, html, onClose }: { title: string; html: string; onClose: () => void }) {
-  const modalState = useOverlayState({
-    defaultOpen: true,
-    onOpenChange: (open) => {
-      if (!open) onClose()
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
     }
-  })
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
-  return (
-    <Modal state={modalState}>
-      <Modal.Backdrop variant="blur">
-        <Modal.Container size="lg" scroll="inside" placement="center">
-          <Modal.Dialog>
-            <Modal.Header className="items-center justify-between">
-              <Modal.Heading className="text-base font-semibold text-foreground">{title}</Modal.Heading>
-              <CloseButton aria-label="关闭指南" onPress={onClose} />
-            </Modal.Header>
-            <Modal.Body>
-              <Typography.Prose className="max-w-none">
-                <div dangerouslySetInnerHTML={{ __html: html || '<p>加载中...</p>' }} />
-              </Typography.Prose>
-            </Modal.Body>
-          </Modal.Dialog>
-        </Modal.Container>
-      </Modal.Backdrop>
-    </Modal>
+  // 原生窗口控件画在最上层，遮罩盖不住，只能让主进程收起来（同开发者愿景）
+  useEffect(() => {
+    const symbolColor = () => (document.documentElement.dataset.mode === 'dark' ? '#ffffff' : '#1a1a1a')
+    window.electronAPI?.window?.setTitleBarOverlay?.({ hidden: true, symbolColor: symbolColor() })
+    return () => {
+      window.electronAPI?.window?.setTitleBarOverlay?.({ hidden: false, symbolColor: symbolColor() })
+    }
+  }, [])
+
+  // 必须挂到 body：设置页祖先有 backdrop-filter，会成为 fixed 的包含块，不挂出去只能盖住主区域
+  return createPortal(
+    <div
+      aria-label={title}
+      aria-modal="true"
+      className="fixed inset-0 overflow-hidden bg-backdrop backdrop-blur-xl"
+      role="dialog"
+      style={{ zIndex: 2000 }}
+    >
+      {/* 关闭按钮与滚动容器平级，才不会跟着内容滚 */}
+      <CloseButton aria-label="关闭指南" className="absolute right-5 top-5 z-10 sm:right-8 sm:top-8" onPress={onClose} />
+      <div className="size-full overflow-y-auto">
+        <Typography.Prose className="mx-auto max-w-3xl px-5 py-16 sm:px-10">
+          <div dangerouslySetInnerHTML={{ __html: html || '<p>加载中...</p>' }} />
+        </Typography.Prose>
+      </div>
+    </div>,
+    document.body
   )
 }
 
@@ -348,6 +359,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
   const [ollamaGuideContent, setOllamaGuideContent] = useState('')
   const [customGuideContent, setCustomGuideContent] = useState('')
   const [settingsPagePortalHost, setSettingsPagePortalHost] = useState<HTMLElement | null>(null)
+  const [relayOneStatusHost, setRelayOneStatusHost] = useState<HTMLDivElement | null>(null)
   const savePresetModalState = useOverlayState({
     isOpen: showSavePresetDialog,
     onOpenChange: setShowSavePresetDialog
@@ -962,15 +974,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
 
             <Form onSubmit={handleSaveCurrentProvider}>
               <Card.Content>
-                {provider === 'relayone' && (
-                  <div className="mb-4">
-                    <RelayOneAccountPanel
-                      onProviderApplied={handleRelayOneProviderApplied}
-                      showMessage={showMessage}
-                      hasConfiguredApiKey={Boolean(apiKey.trim())}
-                    />
-                  </div>
-                )}
+                {provider === 'relayone' && <div className="mb-4" ref={setRelayOneStatusHost} />}
                 <Fieldset className="w-full">
                   <Fieldset.Group className="grid gap-4">
                     <Select
@@ -1003,59 +1007,29 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                       </Select.Popover>
                     </Select>
 
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    {currentProvider?.allowCustomBaseURL && (
-                      <TextField fullWidth value={baseURL} onChange={setBaseURL}>
-                        <Label>服务地址</Label>
-                        <InputGroup variant="secondary" fullWidth>
-                          <InputGroup.Input placeholder={provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'} />
-                          <InputGroup.Suffix>
-                            <Tooltip delay={0}>
-                              <Button
-                                type="button"
-                                variant="tertiary"
-                                size="sm"
-                                isIconOnly
-                                onPress={provider === 'ollama' ? openOllamaGuide : openCustomGuide}
-                                aria-label="查看接入指南"
-                              >
-                                <CircleQuestion width={18} height={18} />
-                              </Button>
-                              <Tooltip.Content>查看接入指南</Tooltip.Content>
-                            </Tooltip>
-                          </InputGroup.Suffix>
-                        </InputGroup>
-                      </TextField>
-                    )}
-
-                    {!!currentProvider?.protocolOptions?.length && (
-                      <Select
-                        selectedKey={customProtocol}
-                        onSelectionChange={(key) => {
-                          if (key != null) setCustomProtocol(key as AiProviderProtocol)
-                        }}
-                        placeholder="请选择协议"
-                        variant="secondary"
-                        fullWidth
-                      >
-                        <Label>协议</Label>
-                        <Select.Trigger>
-                          <Select.Value>{({ defaultChildren }) => currentProtocolOption?.label ?? defaultChildren}</Select.Value>
-                          <Select.Indicator />
-                        </Select.Trigger>
-                        <Select.Popover>
-                          <ListBox>
-                            {protocolOptions.map(option => (
-                              <ListBox.Item key={option.value} id={option.value} textValue={option.label} className="shrink-0">
-                                {option.label}
-                                <ListBox.ItemIndicator />
-                              </ListBox.Item>
-                            ))}
-                          </ListBox>
-                        </Select.Popover>
-                      </Select>
-                    )}
-                  </div>
+                  {currentProvider?.allowCustomBaseURL && (
+                    <TextField fullWidth value={baseURL} onChange={setBaseURL}>
+                      <Label>服务地址</Label>
+                      <InputGroup variant="secondary" fullWidth>
+                        <InputGroup.Input placeholder={provider === 'ollama' ? 'http://localhost:11434/v1' : 'https://api.example.com/v1'} />
+                        <InputGroup.Suffix>
+                          <Tooltip delay={0}>
+                            <Button
+                              type="button"
+                              variant="tertiary"
+                              size="sm"
+                              isIconOnly
+                              onPress={provider === 'ollama' ? openOllamaGuide : openCustomGuide}
+                              aria-label="查看接入指南"
+                            >
+                              <CircleQuestion width={18} height={18} />
+                            </Button>
+                            <Tooltip.Content>查看接入指南</Tooltip.Content>
+                          </Tooltip>
+                        </InputGroup.Suffix>
+                      </InputGroup>
+                    </TextField>
+                  )}
 
                   {!isCodexSubscription && (
                     <div className="space-y-1">
@@ -1083,11 +1057,41 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                           </InputGroup.Suffix>
                         </InputGroup>
                       </TextField>
-                      {provider === 'relayone' && <Description>通过上方账户创建 Key 后会自动填入，并刷新模型列表。</Description>}
+                      {provider === 'relayone' && <Description>在 RelayOne 账户卡片中创建 Key 后会自动填入，并刷新模型列表。</Description>}
                     </div>
                   )}
 
-                  <div className="space-y-2">
+                  <div className={`grid items-start gap-4 ${currentProvider?.protocolOptions?.length ? 'lg:grid-cols-2' : ''}`}>
+                    {!!currentProvider?.protocolOptions?.length && (
+                      <Select
+                        selectedKey={customProtocol}
+                        onSelectionChange={(key) => {
+                          if (key != null) setCustomProtocol(key as AiProviderProtocol)
+                        }}
+                        placeholder="请选择协议"
+                        variant="secondary"
+                        fullWidth
+                        className="min-w-0"
+                      >
+                        <Label>协议</Label>
+                        <Select.Trigger>
+                          <Select.Value>{({ defaultChildren }) => currentProtocolOption?.label ?? defaultChildren}</Select.Value>
+                          <Select.Indicator />
+                        </Select.Trigger>
+                        <Select.Popover>
+                          <ListBox>
+                            {protocolOptions.map(option => (
+                              <ListBox.Item key={option.value} id={option.value} textValue={option.label} className="shrink-0">
+                                {option.label}
+                                <ListBox.ItemIndicator />
+                              </ListBox.Item>
+                            ))}
+                          </ListBox>
+                        </Select.Popover>
+                      </Select>
+                    )}
+
+                  <div className="min-w-0 space-y-2">
                     <div className="flex min-w-0 items-end gap-2">
                       <ComboBox
                         allowsCustomValue
@@ -1145,6 +1149,7 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
                       <Description>{remoteModels.length > 0 ? '远程模型列表' : '在线模型列表'}</Description>
                     )}
                   </div>
+                  </div>
                   </Fieldset.Group>
                 </Fieldset>
               </Card.Content>
@@ -1162,6 +1167,15 @@ function AISummarySettings({ showMessage }: AISummarySettingsProps) {
           </Card>
 
           <aside className="space-y-4">
+            {provider === 'relayone' && (
+              <RelayOneAccountPanel
+                onProviderApplied={handleRelayOneProviderApplied}
+                showMessage={showMessage}
+                hasConfiguredApiKey={Boolean(apiKey.trim())}
+                statusHost={relayOneStatusHost}
+              />
+            )}
+
             <Card>
               <Card.Header className="flex-row items-center gap-3">
                 <AIProviderLogo providerId={provider} logo={currentProvider?.logo} alt={currentProvider?.displayName || provider} className="shrink-0" size={34} />

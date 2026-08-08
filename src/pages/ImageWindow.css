@@ -35,6 +35,12 @@
     -webkit-app-region: drag;
 }
 
+/* 窗口按钮见 components/GlassWindowControls */
+
+.image-window-container .title-bar .window-controls button svg {
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+}
+
 .image-window-container .bottom-toolbar-shell {
     position: absolute;
     right: 0;

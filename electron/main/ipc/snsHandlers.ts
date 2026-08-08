@@ -6,6 +6,16 @@ import type { MainProcessContext } from '../context'
  * 媒体下载、导出写文件和代理图片保持原 channel，snsService 仍按需动态加载。
  */
 export function registerSnsHandlers(ctx: MainProcessContext): void {
+  ipcMain.handle('sns:getCover', async () => {
+    try {
+      const { snsService } = await import('../../services/snsService')
+      return await snsService.getCover()
+    } catch (e: any) {
+      ctx.getLogService()?.warn('SNS', '获取朋友圈头图失败', { error: e.message })
+      return { success: false, error: e.message }
+    }
+  })
+
   ipcMain.handle('sns:getTimeline', async (_, limit: number, offset: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number) => {
     try {
       const { snsService } = await import('../../services/snsService')

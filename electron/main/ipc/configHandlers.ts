@@ -2,10 +2,12 @@ import { ipcMain } from 'electron'
 import type { MainProcessContext } from '../context'
 import { chatService } from '../../services/chatService'
 import { clearMessageDbScannerCache } from '../../services/messageDbScanner'
+import { snsService } from '../../services/snsService'
 
 function clearStatsCaches(): void {
   clearMessageDbScannerCache()
   chatService.close()
+  snsService.clearCoverCache()
 }
 
 export function registerConfigHandlers(ctx: MainProcessContext): void {

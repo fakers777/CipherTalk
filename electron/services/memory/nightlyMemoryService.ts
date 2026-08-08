@@ -2,6 +2,7 @@ import type { MainProcessContext } from '../../main/context'
 import { chatService } from '../chatService'
 import { isSystemContactUsername } from '../chat/constants'
 import type { ChatSession, Message } from '../chat/types'
+import { normalizeDiarySummaryHour } from './memoryDatabase'
 
 const CHECK_INTERVAL_MS = 60 * 60 * 1000
 const STARTUP_DELAY_MS = 90_000
@@ -291,9 +292,11 @@ async function readUnreadSessionMessages(session: ChatSession): Promise<Message[
 /**
  * 目标日的真实聊天摘要（读没读都算）：日记的主素材。
  * 未读消息只反映"没点开的推送"，用户自己参与过的对话才是这一天的生活。
+ * date 对应的窗口是 [date@summaryHour, date+1@summaryHour)（本地时间，左闭右开）。
  */
-export async function readTodayChatDiarySource(date: string): Promise<string> {
-  const dayStartMs = new Date(`${date}T00:00:00`).getTime()
+export async function readTodayChatDiarySource(date: string, summaryHour = 2): Promise<string> {
+  const hour = normalizeDiarySummaryHour(summaryHour)
+  const dayStartMs = new Date(`${date}T00:00:00`).getTime() + hour * 3600 * 1000
   if (!Number.isFinite(dayStartMs)) return ''
   const dayStartSec = Math.floor(dayStartMs / 1000)
   const dayEndSec = dayStartSec + 24 * 3600
@@ -375,7 +378,7 @@ class NightlyMemoryService {
    const provider = config.getAICurrentProvider()
    if (!String(config.getAIProviderConfig(provider)?.apiKey || '').trim()) return
     if (config.get('diaryEnabled') === false) return
-   const summaryHour = Number(config.get('diarySummaryHour') ?? 2)
+   const summaryHour = normalizeDiarySummaryHour(config.get('diarySummaryHour') ?? 2)
     const customPrompt = String(config.get('diaryCustomPrompt') || '').trim()
     this.running = true
     try {
@@ -389,7 +392,7 @@ class NightlyMemoryService {
       if (!date) return
       const [unreadMessages, dayMessages] = await Promise.all([
         readUnreadDiarySource().catch(() => ''),
-        readTodayChatDiarySource(date).catch(() => '')
+        readTodayChatDiarySource(date, summaryHour).catch(() => '')
       ])
       await maybeRunDailyConsolidation(resolveProviderConfig(), undefined, { unreadMessages, dayMessages, summaryHour, customPrompt })
       this.ctx?.getLogService()?.info('NightlyMemory', '夜间记忆整理检查完成')

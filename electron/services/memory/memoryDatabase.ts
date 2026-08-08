@@ -397,9 +397,65 @@ function formatDate(ms = nowMs()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-function normalizeDiarySummaryHour(value: unknown): number {
+export function normalizeDiarySummaryHour(value: unknown): number {
   const hour = Math.floor(Number(value))
   return Number.isFinite(hour) ? Math.max(0, Math.min(23, hour)) : 2
+}
+
+/**
+ * 日记按 summaryHour 对齐的 24 小时窗口组织：diaries/{date}.md 覆盖 [date@summaryHour, date+1@summaryHour)。
+ * 注意：窗口用固定毫秒算术（24*3600*1000），在 +08:00 等无 DST 时区下精确无缝；
+ * 若未来支持 DST 时区需换带时区的日期库。
+ */
+function shiftDateKey(date: string, deltaDays: number): string {
+  const ms = new Date(`${date}T00:00:00`).getTime() + deltaDays * 24 * 3600 * 1000
+  return Number.isFinite(ms) ? formatDate(ms) : date
+}
+
+/** 返回某条日记日期对应的 24h 窗口（本地时间，左闭右开）。 */
+function diaryWindowBoundsMs(date: string, summaryHour: number): { startMs: number; endMs: number } {
+  const startMs = new Date(`${date}T00:00:00`).getTime() + summaryHour * 3600 * 1000
+  return { startMs, endMs: startMs + 24 * 3600 * 1000 }
+}
+
+/**
+ * 「现在」落在哪一天的日记窗口里。窗口 [date@summaryHour, date+1@summaryHour)：
+ * 到点（hour >= summaryHour）后属于今天，凌晨未到点时仍属于昨天。
+ * 手动「总结今天」与定时任务（经 getDailyConsolidationTarget 间接）共用此规则，避免凌晨取到全在未来、空内容的窗口。
+ */
+export function diaryWindowDateForNow(timestamp = nowMs(), summaryHour = 2): string {
+  const hour = normalizeDiarySummaryHour(summaryHour)
+  const today = formatDate(timestamp)
+  return new Date(timestamp).getHours() >= hour ? today : shiftDateKey(today, -1)
+}
+
+/** 把跨日的对话日志按窗口切片：主日(date)取 summaryHour 之后，次日(date+1)取 summaryHour 之前。 */
+function conversationBlocksInWindow(primaryContent: string, nextDayContent: string, summaryHour: number): string {
+  const cutoff = summaryHour * 60
+  const pick = (content: string, atOrAfterCutoff: boolean): string[] =>
+    content
+      .replace(/\r\n/g, '\n')
+      .split(/\n(?=## \d{2}:\d{2})/)
+      .filter((block) => {
+        const m = block.match(/^## (\d{2}):(\d{2})/)
+        if (!m) return false
+        const minutes = Number(m[1]) * 60 + Number(m[2])
+        return atOrAfterCutoff ? minutes >= cutoff : minutes < cutoff
+      })
+  return [...pick(primaryContent, true), ...pick(nextDayContent, false)].join('\n\n').slice(0, 40_000)
+}
+
+/** 从 BOOKMARKS 全文里挑出时间戳落在 [startMs, endMs) 的行。 */
+function bookmarksInWindow(content: string, startMs: number, endMs: number): string {
+  return content
+    .split(/\r?\n/)
+    .filter((line) => {
+      const m = line.match(/^-\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})/)
+      if (!m) return false
+      const ts = new Date(`${m[1]}T${m[2]}:${m[3]}:00`).getTime()
+      return Number.isFinite(ts) && ts >= startMs && ts < endMs
+    })
+    .join('\n')
 }
 
 function frontMatterValue(value: unknown): string {
@@ -1566,25 +1622,30 @@ export class MemoryDatabase {
   getDailyConsolidationTarget(timestamp = nowMs(), summaryHour = 2): string | null {
     const hour = new Date(timestamp).getHours()
     if (hour < normalizeDiarySummaryHour(summaryHour)) return null
-    const date = formatDate(timestamp)
+    // 到点后整理“刚结束的 24h 窗口”：窗口 = [date-1@summaryHour, date@summaryHour)，起始日为昨天。
+    const date = shiftDateKey(formatDate(timestamp), -1)
     const meta = this.readMeta()
-    return meta.lastConsolidatedDate === date ? null : date
+    // 升级迁移：老版本按自然日写 lastConsolidatedDate，可能与新窗口起始日重合而跳过整窗。
+    // diaryWindowVersion != 2 时首次无视 lastConsolidatedDate 强制跑一遍，跑完写入版本号（见 writeDiary）。
+    if (meta.diaryWindowVersion === '2' && meta.lastConsolidatedDate === date) return null
+    return date
   }
 
-  readDailyConsolidationSource(date: string): { conversations: string; bookmarks: string } {
+  readDailyConsolidationSource(date: string, summaryHour = 2): { conversations: string; bookmarks: string } {
     const root = this.ensureBank()
-    const conversations = this.readTextFile(join(root, 'conversations', `${date}.md`), 40_000)
+    const hour = normalizeDiarySummaryHour(summaryHour)
+    const primary = this.readTextFile(join(root, 'conversations', `${date}.md`), 40_000)
+    const nextDay = this.readTextFile(join(root, 'conversations', `${shiftDateKey(date, 1)}.md`), 40_000)
+    const conversations = conversationBlocksInWindow(primary, nextDay, hour)
     const bookmarksPath = join(root, 'BOOKMARKS.md')
+    const { startMs, endMs } = diaryWindowBoundsMs(date, hour)
     const bookmarks = existsSync(bookmarksPath)
-      ? readFileSync(bookmarksPath, 'utf8')
-        .split(/\r?\n/)
-        .filter((line) => line.includes(date))
-        .join('\n')
+      ? bookmarksInWindow(readFileSync(bookmarksPath, 'utf8'), startMs, endMs)
       : ''
     return { conversations, bookmarks }
   }
 
-  writeDiary(date: string, content: string): void {
+  writeDiary(date: string, content: string, options?: { finalize?: boolean }): void {
     const root = this.ensureBank()
     const file = join(root, SELF_REFERENCE_DIR, 'diaries', `${date}.md`)
     const text = content.trim() || [
@@ -1595,7 +1656,10 @@ export class MemoryDatabase {
       ''
     ].join('\n')
     writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`, 'utf8')
-    this.writeMeta({ lastConsolidatedDate: date, lastConsolidatedAt: new Date().toISOString() })
+    if (options?.finalize !== false) {
+      // 封盘时一并标记窗口版本号，完成 24h 滑动窗口迁移。
+      this.writeMeta({ diaryWindowVersion: '2', lastConsolidatedDate: date, lastConsolidatedAt: new Date().toISOString() })
+    }
     this.syncDerivedMarkdown()
   }
 
@@ -1640,6 +1704,11 @@ export class MemoryDatabase {
     const filePath = join(this.ensureBank(), SELF_REFERENCE_DIR, 'diaries', `${safeDate}.md`)
     if (!existsSync(filePath)) return false
     unlinkSync(filePath)
+    // 删除日记后允许后续重新整理：若该日恰好是 lastConsolidatedDate，清除标记。
+    const meta = this.readMeta()
+    if (meta.lastConsolidatedDate === safeDate) {
+      this.writeMeta({ lastConsolidatedDate: '' })
+    }
     this.syncDerivedMarkdown()
     return true
   }

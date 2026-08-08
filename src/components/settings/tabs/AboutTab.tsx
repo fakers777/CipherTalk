@@ -16,15 +16,8 @@ interface AboutTabProps {
   onCheckUpdate: () => void
 }
 
-const projectLinks = [
-  { label: '密语 CipherTalk', url: 'https://github.com/ILoveBingLu/miyu' },
-  { label: 'WeFlow', url: 'https://github.com/hicccc77/WeFlow' }
-]
-
-const relatedLinks = [
-  { label: '官网', url: 'https://miyu.aiqji.com' },
-  { label: 'ChatLab', url: 'https://chatlab.fun' }
-]
+const PROJECT_URL = 'https://github.com/ILoveBingLu/CipherTalk'
+const WEBSITE_URL = 'https://miyu.aiqji.com'
 
 function AboutTab({
   appVersion,
@@ -181,52 +174,35 @@ function AboutTab({
 
       <Separator />
 
-      <section className="grid gap-8 lg:grid-cols-2">
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Typography.Heading level={3} className="text-lg font-semibold text-foreground">开源项目</Typography.Heading>
-            <Typography.Paragraph size="sm" color="muted">项目源码与相关依赖。</Typography.Paragraph>
-          </div>
-          <div className="flex flex-col gap-2">
-            {projectLinks.map(link => (
-              <Button
-                key={link.url}
-                type="button"
-                variant="secondary"
-                className="w-full justify-start"
-                onPress={() => openExternal(link.url)}
-              >
-                <LogoGithub width={16} height={16} />
-                {link.label}
-                <ArrowUpRightFromSquare width={14} height={14} className="ml-auto" />
-              </Button>
-            ))}
-          </div>
+      <section className="space-y-3">
+        <div className="space-y-1">
+          <Typography.Heading level={3} className="text-lg font-semibold text-foreground">项目与链接</Typography.Heading>
+          <Typography.Paragraph size="sm" color="muted">密语项目、官方网站与用户协议。</Typography.Paragraph>
         </div>
-
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <Typography.Heading level={3} className="text-lg font-semibold text-foreground">相关链接</Typography.Heading>
-            <Typography.Paragraph size="sm" color="muted">官方网站、配套产品与用户协议。</Typography.Paragraph>
-          </div>
-          <div className="flex flex-col gap-2">
-            {relatedLinks.map(link => (
-              <Button
-                key={link.url}
-                type="button"
-                variant="secondary"
-                className="w-full justify-start"
-                onPress={() => openExternal(link.url)}
-              >
-                <ArrowUpRightFromSquare width={16} height={16} />
-                {link.label}
-              </Button>
-            ))}
-            <Button type="button" variant="outline" className="w-full justify-start" onPress={openAgreement}>
-              <ShieldCheck width={16} height={16} />
-              用户协议
-            </Button>
-          </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full justify-start"
+            onPress={() => openExternal(PROJECT_URL)}
+          >
+            <LogoGithub width={16} height={16} />
+            密语项目地址
+            <ArrowUpRightFromSquare width={14} height={14} className="ml-auto" />
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full justify-start"
+            onPress={() => openExternal(WEBSITE_URL)}
+          >
+            <ArrowUpRightFromSquare width={16} height={16} />
+            官网
+          </Button>
+          <Button type="button" variant="outline" className="w-full justify-start" onPress={openAgreement}>
+            <ShieldCheck width={16} height={16} />
+            用户协议
+          </Button>
         </div>
       </section>
 

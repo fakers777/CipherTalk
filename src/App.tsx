@@ -21,6 +21,7 @@ import ExportPage from './pages/export/ExportPage'
 import ActivationPage from './pages/ActivationPage'
 import ImageWindow from './pages/ImageWindow'
 import VideoWindow from './pages/VideoWindow'
+import ChatSummaryWindow from './pages/ChatSummaryWindow'
 import BrowserWindowPage from './pages/BrowserWindowPage'
 import SkillPreviewWindow from './pages/SkillPreviewWindow'
 import PosterStyleWindow from './pages/PosterStyleWindow'
@@ -110,6 +111,11 @@ function App() {
   const [memoryMigrating, setMemoryMigrating] = useState(false)
   const [memoryMigrationError, setMemoryMigrationError] = useState('')
   const [memoryMigrationDismissed, setMemoryMigrationDismissed] = useState(false)
+  // CT-Agent 首次进入后就常驻挂载：切到别的页面只是隐藏，useChat 的流和落库定时器都不会被卸载打断
+  const [agentMounted, setAgentMounted] = useState(false)
+  useEffect(() => {
+    if (location.pathname === '/agent') setAgentMounted(true)
+  }, [location.pathname])
 
   useEffect(() => {
     const off = window.electronAPI.window.onNavigate((route) => {
@@ -440,7 +446,7 @@ function App() {
   // 启动时自动检查配置并连接数据库
   useEffect(() => {
     // 独立窗口不需要自动连接主数据库
-    if (isChatWindow || isMomentsWindow || isAgreementWindow || isWelcomeWindow || isPosterStyleWindow || location.pathname === '/image-viewer-window' || location.pathname === '/pet-window' || location.pathname === '/reply-tile-window') return
+    if (isChatWindow || isMomentsWindow || isAgreementWindow || isWelcomeWindow || isPosterStyleWindow || location.pathname === '/image-viewer-window' || location.pathname === '/pet-window' || location.pathname === '/reply-tile-window' || location.pathname === '/chat-summary') return
 
     const autoConnect = async () => {
       try {
@@ -561,6 +567,11 @@ function App() {
   // 独立视频播放窗口
   if (location.pathname === '/video-player-window') {
     return <VideoWindow />
+  }
+
+  // 独立 AI 摘要窗口
+  if (location.pathname === '/chat-summary') {
+    return <ChatSummaryWindow />
   }
 
   // 桌面悬浮桌宠窗口
@@ -866,7 +877,7 @@ function App() {
               <Route path="/data-management" element={<DataManagementPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/mcp" element={<McpPage />} />
-              <Route path="/agent" element={<AgentPage />} />
+              {/* /agent 不走 Routes，见下方常驻挂载的 AgentPage */}
               <Route path="/personas" element={<PersonasPage />} />
               <Route path="/diary" element={<DiaryPage />} />
               <Route path="/pets" element={<PetsPage />} />
@@ -875,6 +886,11 @@ function App() {
               <Route path="/chat-history/:sessionId/:messageId" element={<ChatHistoryPage />} />
               <Route path="/plugin/:pluginId/:viewId" element={<PluginViewPage />} />
             </Routes>
+            {agentMounted && (
+              <div className={isAgentPage ? 'h-full' : 'hidden'}>
+                <AgentPage />
+              </div>
+            )}
           </RouteGuard>
         </main>
       </div>

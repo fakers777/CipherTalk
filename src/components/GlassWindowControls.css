@@ -1,0 +1,79 @@
+.glass-window-controls {
+    position: absolute;
+    top: 3px;
+    right: 6px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(0, 0, 0, 0.26);
+    backdrop-filter: blur(10px) saturate(160%);
+    -webkit-backdrop-filter: blur(10px) saturate(160%);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    -webkit-app-region: no-drag;
+}
+
+/* 三份等分紧贴，靠玻璃本身的明暗区分 hover，不叠不透明色块 */
+.glass-window-controls button {
+    width: 40px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.78);
+    cursor: pointer;
+    /* ponytail: hover 用半透明叠色，不用 backdrop-filter —— 父层已有 backdrop 时
+       子层的 backdrop 采样不到东西（看着像没生效），而且它没法平滑插值，会有延迟 */
+    background: transparent;
+    transition: background 0.14s ease, color 0.14s ease;
+}
+
+.glass-window-controls button:first-of-type {
+    border-radius: 999px 0 0 999px;
+}
+
+.glass-window-controls button:last-of-type {
+    border-radius: 0 999px 999px 0;
+}
+
+/* mac：摆左上角，顺序改成 关闭 / 最小化 / 最大化 */
+.glass-window-controls.is-mac {
+    right: auto;
+    left: 6px;
+}
+
+.glass-window-controls.is-mac .close-btn {
+    order: -1;
+    border-radius: 999px 0 0 999px;
+}
+
+.glass-window-controls.is-mac button:first-of-type {
+    border-radius: 0;
+}
+
+.glass-window-controls button:hover {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+
+.glass-window-controls button:active {
+    background: rgba(255, 255, 255, 0.32);
+}
+
+/* 关闭：半透明红，底下的玻璃和画面仍透得出来 */
+.glass-window-controls button.close-btn:hover {
+    background: rgba(232, 17, 35, 0.62);
+    color: #fff;
+}
+
+.glass-window-controls button.close-btn:active {
+    background: rgba(232, 17, 35, 0.78);
+}
+
+.glass-window-controls button svg {
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
+}

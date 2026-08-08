@@ -9,7 +9,7 @@ import { tool, generateObject, generateText } from 'ai'
 import { z } from 'zod'
 import type { AgentScope, AgentProviderConfig } from '../types'
 import type { MemoryItem, MemorySourceType } from '../../memory/memorySchema'
-import { AI_USER_PROFILE_UID, ONBOARDING_PROFILE_UIDS, memoryDatabase, hashMemoryContent } from '../../memory/memoryDatabase'
+import { AI_USER_PROFILE_UID, ONBOARDING_PROFILE_UIDS, memoryDatabase, hashMemoryContent, normalizeDiarySummaryHour } from '../../memory/memoryDatabase'
 import { createLanguageModel } from '../provider'
 import { invalidateMemoryCache } from '../runtimeCache'
 import { rerankCandidates, type RerankMeta } from '../../ai/rerankService'
@@ -449,6 +449,8 @@ type DailyDiaryGenerationOptions = {
   dayMessages?: string
   summaryHour?: number
   customPrompt?: string
+  /** false 时不更新 lastConsolidatedDate：用于手动“总结今天”预览，避免阻塞次日定时完整整理 */
+  finalize?: boolean
 }
 
 function normalizeDiaryCustomPrompt(value: unknown): string {
@@ -458,13 +460,16 @@ function normalizeDiaryCustomPrompt(value: unknown): string {
 function getDiaryGenerationOptions(extraSource: DailyDiaryGenerationOptions): DailyDiaryGenerationOptions {
   const hasSummaryHour = Number.isFinite(Number(extraSource.summaryHour))
   const hasCustomPrompt = Object.prototype.hasOwnProperty.call(extraSource, 'customPrompt')
-  if (hasSummaryHour && hasCustomPrompt) return extraSource
+  // 两条参数都在场时（夜间任务）也要归一化 summaryHour，不能提前返回绕过。
+  if (hasSummaryHour && hasCustomPrompt) {
+    return { ...extraSource, summaryHour: normalizeDiarySummaryHour(extraSource.summaryHour) }
+  }
 
   const config = new ConfigService()
   try {
     return {
       ...extraSource,
-      summaryHour: hasSummaryHour ? extraSource.summaryHour : Number(config.get('diarySummaryHour') ?? 2),
+      summaryHour: hasSummaryHour ? normalizeDiarySummaryHour(extraSource.summaryHour) : normalizeDiarySummaryHour(config.get('diarySummaryHour') ?? 2),
       customPrompt: hasCustomPrompt ? extraSource.customPrompt : String(config.get('diaryCustomPrompt') || '').trim(),
     }
   } finally {
@@ -605,10 +610,12 @@ export async function runDailyDiaryConsolidation(
   signal?: AbortSignal,
   extraSource: DailyDiaryGenerationOptions = {}
 ): Promise<void> {
-  const source = memoryDatabase.readDailyConsolidationSource(date)
-  const unreadMessages = String(extraSource.unreadMessages || '').trim()
-  const dayMessages = String(extraSource.dayMessages || '').trim()
-  const customPrompt = normalizeDiaryCustomPrompt(extraSource.customPrompt)
+  const options = getDiaryGenerationOptions(extraSource)
+  const source = memoryDatabase.readDailyConsolidationSource(date, options.summaryHour)
+  const unreadMessages = String(options.unreadMessages || '').trim()
+  const dayMessages = String(options.dayMessages || '').trim()
+  const customPrompt = normalizeDiaryCustomPrompt(options.customPrompt)
+  const finalize = options.finalize !== false
   const hasCustomPrompt = customPrompt.length > 0
   if (!source.conversations.trim() && !source.bookmarks.trim() && !unreadMessages && !dayMessages) {
     memoryDatabase.writeDiary(date, [
@@ -621,7 +628,7 @@ export async function runDailyDiaryConsolidation(
       '## 记忆线索',
       '- 状态：无新增。',
       ''
-    ].join('\n'))
+    ].join('\n'), { finalize })
     return
   }
   try {
@@ -708,7 +715,7 @@ export async function runDailyDiaryConsolidation(
         `未读消息（没点开的外部动态，辅料）：\n${unreadMessages || '暂无未读消息。'}`
       ].join('\n'),
     })
-    memoryDatabase.writeDiary(date, diaryText)
+    memoryDatabase.writeDiary(date, diaryText, { finalize })
     await consolidateDailyBookmarks({ date, bookmarks: source.bookmarks, providerConfig, signal })
     await extractMemories({
       scope: { kind: 'global' },
@@ -731,7 +738,7 @@ export async function runDailyDiaryConsolidation(
       `- 日期：${date}`,
       ...(source.bookmarks ? source.bookmarks.split(/\r?\n/).filter(Boolean).slice(0, 8) : ['- 暂无明确线索。']),
       ''
-    ].join('\n'))
+    ].join('\n'), { finalize })
     await consolidateDailyBookmarks({ date, bookmarks: source.bookmarks, providerConfig, signal })
   }
 }

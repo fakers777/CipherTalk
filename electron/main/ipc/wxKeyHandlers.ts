@@ -47,7 +47,12 @@ export function registerWxKeyHandlers(ctx: MainProcessContext): void {
     return wxKeyService.waitForWeChatWindow(maxWaitSeconds)
   })
 
-  ipcMain.handle('wxkey:startGetKey', async (event, customWechatPath?: string, dbPath?: string) => {
+  ipcMain.handle('wxkey:startGetKey', async (
+    event,
+    customWechatPath?: string,
+    dbPath?: string,
+    options?: { allowRestart?: boolean; forceRestart?: boolean }
+  ) => {
     ctx.getLogService()?.info('WxKey', '开始获取微信密钥', { customWechatPath })
     if (process.platform === 'darwin') {
       try {
@@ -184,7 +189,7 @@ export function registerWxKeyHandlers(ctx: MainProcessContext): void {
 
       // 首选方案：对已登录、正在运行的微信直接扫内存（global_config 结构游走），
       // 一次性提取 db_key + 账号字段（wxid/昵称/微信号/手机号），无需退出重登。
-      if (wxKeyService.isWeChatRunning()) {
+      if (!options?.forceRestart && wxKeyService.isWeChatRunning()) {
         event.sender.send('wxkey:status', { status: '检测到微信正在运行，正在直接读取账号信息...', level: 1 })
         const account = wxKeyService.scanAccount()
         if (account?.dbKey) {
@@ -213,6 +218,14 @@ export function registerWxKeyHandlers(ctx: MainProcessContext): void {
           // 但仍带回解析后的目录名供前端自动绑定目录。
           ctx.getLogService()?.info('WxKey', '直接读取到账号信息（未通过目录验证），返回密钥与账号', { bindWxid })
           return { success: true, key: account.dbKey, account: outAccount }
+        }
+        if (options?.allowRestart === false) {
+          ctx.getLogService()?.info('WxKey', '直接读取未命中，等待用户确认是否重启微信')
+          return {
+            success: false,
+            needRestart: true,
+            error: '直接读取微信内存未获取到密钥'
+          }
         }
         ctx.getLogService()?.info('WxKey', '直接读取未命中，回退到重启微信抓取流程')
       }

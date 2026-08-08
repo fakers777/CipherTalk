@@ -1,6 +1,6 @@
 {
   "name": "ciphertalk",
-  "version": "2026.729.0",
+  "version": "2026.807.1",
   "description": "密语 - 微信聊天记录查看工具",
   "author": "ILoveBingLu",
   "license": "CC-BY-NC-SA-4.0",
@@ -28,6 +28,7 @@
     "build:release-body": "node scripts/generate-release-body.js",
     "build:release-announcement": "node scripts/prepare-release-announcement.js",
     "build:models-snapshot": "node scripts/fetch-models-dev-snapshot.cjs",
+    "build:models-logos": "node scripts/fetch-models-dev-logos.cjs",
     "notify:telegram": "node scripts/send-telegram-release.js",
     "mcp": "node scripts/mcp-runner.js",
     "mcp:probe": "node scripts/mcp-probe.js",
@@ -41,6 +42,8 @@
     "test:agent-stream-sanitizer": "node --experimental-strip-types scripts/test-openai-compatible-stream-sanitizer.ts",
     "test:agent-context-reset": "node --experimental-strip-types scripts/test-agent-context-reset.ts",
     "test:codex-models": "node --experimental-strip-types scripts/test-codex-models-payload.ts",
+    "test:video-lookup": "node --experimental-strip-types scripts/test-video-lookup.ts",
+    "test:agent-conversation-schema": "node scripts/run-electron-node-test.cjs scripts/test-agent-conversation-schema.ts",
     "eval:retrieval": "node scripts/run-retrieval-evaluator.cjs",
     "preview": "vite preview",
     "electron:dev": "node scripts/clean-dist-electron.cjs && vite --mode electron",
@@ -93,7 +96,7 @@
     "qrcode": "^1.5.4",
     "radix-ui": "^1.4.3",
     "sharp": "^0.34.5",
-    "sherpa-onnx-node": "^1.12.23",
+    "sherpa-onnx-node": "^1.13.4",
     "shiki": "^4.2.0",
     "silk-wasm": "^3.7.1",
     "streamdown": "^2.5.0",
@@ -199,8 +202,9 @@
       "installerHeaderIcon": "public/icon.ico",
       "perMachine": false,
       "allowElevation": true,
-      "installerSidebar": null,
-      "uninstallerSidebar": null
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp"
     },
     "extraResources": [
       {
@@ -216,6 +220,13 @@
         "to": "assets/",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "electron/services/ai/",
+        "to": "guides/",
+        "filter": [
+          "*使用指南.md"
         ]
       },
       {

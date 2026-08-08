@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, type BrowserWindow } from 'electron'
 import type { MainProcessContext } from '../context'
 import type {
   RelayOneCreateKeyInput,
@@ -71,4 +71,21 @@ export function registerRelayOneHandlers(ctx: MainProcessContext): void {
   ipcMain.handle('relayOne:createPaymentOrder', async (_event, input: RelayOneCreatePaymentOrderInput) => invoke(() => service.createPaymentOrder(input)))
   ipcMain.handle('relayOne:getPaymentOrder', async (_event, orderId: string) => invoke(() => service.getPaymentOrder(String(orderId || ''))))
   ipcMain.handle('relayOne:cancelPaymentOrder', async (_event, orderId: string) => invoke(() => service.cancelPaymentOrder(String(orderId || ''))))
+
+  // 支付页在应用内窗口打开，订单支付成功后由渲染端调用 closePaymentWindow 关闭
+  let paymentWindow: BrowserWindow | null = null
+  const closePaymentWindow = () => {
+    if (paymentWindow && !paymentWindow.isDestroyed()) paymentWindow.close()
+    paymentWindow = null
+  }
+
+  ipcMain.handle('relayOne:openPaymentWindow', async (_event, url: string) => invoke(() => {
+    const target = String(url || '').trim()
+    if (!/^https?:\/\//i.test(target)) throw new Error('支付链接无效')
+    closePaymentWindow()
+    paymentWindow = ctx.getWindowManager().openBrowserWindow(target, 'RelayOne 充值')
+    paymentWindow.on('closed', () => { paymentWindow = null })
+  }))
+
+  ipcMain.handle('relayOne:closePaymentWindow', async () => invoke(() => closePaymentWindow()))
 }

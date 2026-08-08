@@ -33,6 +33,7 @@ import {
 } from '@/components/ai-elements/prompt-input'
 import { ImagePreview, type ImagePreviewOriginRect } from '@/components/ImagePreview'
 import AIProviderLogo from '@/components/ai/AIProviderLogo'
+import RelayOneBalanceChip from '@/components/ai/RelayOneBalanceChip'
 import { getAIProviders, type AIModelInfo, type AIProviderInfo } from '@/types/ai'
 import { Loader } from '@/components/ai-elements/loader'
 import { IpcChatTransport, type AgentModelConfig, type AgentProgressEvent, type AgentReasoningEffort, type AgentScope, type AgentToolProfile, type CodeWorkspaceRef } from '@/features/aiagent/transport/ipcChatTransport'
@@ -2026,6 +2027,9 @@ export default function AgentPage() {
     }
     if (busy) {
       void stop()
+      // 审批恢复的运行被手动停止时收不到 run_finished，这里必须同步清掉 pending，
+      // 否则 effectiveStatus 永远停在 streaming，按钮卡在停止图标
+      setAgentRunPending(false)
       setSubAgentProgress([])
       return
     }
@@ -2175,11 +2179,16 @@ export default function AgentPage() {
     setSubAgentProgress([])
     runIsPlanRef.current = false
     submitScopeRef.current = activeScopeRef.current
-      await addToolApprovalResponse({
-        id: approvalId,
-        approved,
-        reason: approved ? '用户已确认' : '用户拒绝',
-      })
+      try {
+        await addToolApprovalResponse({
+          id: approvalId,
+          approved,
+          reason: approved ? '用户已确认' : '用户拒绝',
+        })
+      } catch {
+        // 审批提交失败不会有 run_finished 事件来清 pending，必须自己清，否则停止图标卡死
+        setAgentRunPending(false)
+      }
     })()
   }, [addToolApprovalResponse, busy, localAgentRunning])
 
@@ -2490,6 +2499,7 @@ export default function AgentPage() {
         </div>
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
           <Toolbar aria-label="对话操作" className="gap-1.5 p-0">
+            {effectiveProviderId === 'relayone' && <RelayOneBalanceChip />}
             <CodeWorkspacePanelPopover
               activeTab={codeWorkspacePanelTab}
               isOpen={codeWorkspacePanelOpen}

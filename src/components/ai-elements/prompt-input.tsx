@@ -509,21 +509,38 @@ export const PromptInput = ({
   useLayoutEffect(() => {
     const el = glassRef.current;
     if (!el) return;
+    let lastWidth = 0;
+    let lastHeight = 0;
     const update = () => {
       const rect = el.getBoundingClientRect();
       const width = Math.round(rect.width);
       const height = Math.round(rect.height);
       if (width < 2 || height < 2) return;
+      if (width === lastWidth && height === lastHeight) return;
       const next = createLiquidGlassBubbleMap(width, height, {
         ...PROMPT_GLASS,
         radii: readGlassRadii(el, width, height),
       });
-      if (next) setGlassMap(next);
+      if (next) {
+        lastWidth = width;
+        lastHeight = height;
+        setGlassMap(next);
+      }
     };
     update();
-    const ro = new ResizeObserver(update);
+    // 尺寸过渡动画（如输入框居中/落底的 max-width 渐变）会让 ResizeObserver 每帧触发，
+    // 而重建贴图 = 逐像素循环 + toDataURL PNG 编码 + SVG 滤镜重建，每帧做必掉帧。
+    // 尾沿去抖：飞行中沿用旧贴图（滤镜边缘短暂失配肉眼难辨），尺寸稳定后重建一次。
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(update, 120);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      clearTimeout(timer);
+      ro.disconnect();
+    };
   }, []);
 
   const glassBackdrop = glassMap

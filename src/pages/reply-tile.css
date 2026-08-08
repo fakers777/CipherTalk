@@ -224,6 +224,25 @@
   gap: 8px;
 }
 
+.reply-tile__pending {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 10px 8px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 186, 84, 0.28);
+  border-radius: 10px;
+  background: rgba(255, 186, 84, 0.12);
+  color: rgba(242, 243, 245, 0.86);
+  font-size: 12px;
+}
+
+.reply-tile__pending--error {
+  border-color: rgba(255, 107, 107, 0.32);
+  background: rgba(255, 107, 107, 0.14);
+}
+
 .reply-tile__actions {
   display: flex;
   gap: 10px;

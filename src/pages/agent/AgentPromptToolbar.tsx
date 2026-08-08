@@ -221,13 +221,14 @@ export function SlashCommandButton({
 
 /** 发送按钮：短按提交/停止，长按语音输入（转写结果追加进输入框），与克隆聊天页一致 */
 export function AgentPromptPrimaryAction({ busy, status }: { busy: boolean; status: ChatStatus; workspaceReferenceCount: number }) {
-  const { textInput } = usePromptInputController()
+  const { textInput, attachments } = usePromptInputController()
 
-  // 空输入不禁用按钮：长按录音需要它可按；空的短按由表单 onSubmit 判空忽略
+  // 空输入不禁用按钮：长按录音需要它可按；空的短按由表单 onSubmit 判空忽略。
+  // 已挂附件时纯附件也能发送，此时按钮必须显示发送而不是麦克风，否则图标和实际行为不符。
   return (
     <HoldToTalkSubmit
       holdDisabled={busy}
-      voiceInputEnabled={!textInput.value.trim()}
+      voiceInputEnabled={!textInput.value.trim() && attachments.files.length === 0}
       status={status}
       onTranscript={(text) => {
         const current = textInput.value

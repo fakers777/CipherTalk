@@ -1,6 +1,8 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import type { ImageViewerListItem, ImageViewerOpenOptions, MainProcessContext, ReplyTileEntry } from '../context'
 import { replyTileService } from '../../services/replyTileService'
+import { commitWeChatInput, fillWeChatInput } from '../../services/wechatWindowTracker'
+import { autoReplyService } from '../../services/autoReplyService'
 
 type TitleBarOverlayState = {
   hidden: boolean
@@ -39,6 +41,22 @@ function applyTitleBarOverlay(win: BrowserWindow, state: TitleBarOverlayState) {
 
 function supportsReplyTileWindow(): boolean {
   return process.platform === 'win32' || process.platform === 'darwin'
+}
+
+/**
+ * 渲染端（当前打开的那个会话）生成的建议也要进自动发送队列。
+ * replyTileService 的后台检查会跳过当前会话交给渲染端做，不接这一路的话，
+ * 「正开着谁的聊天」就等于「对谁关掉了全自动」。
+ */
+function autoEnqueueFromRenderer(ctx: MainProcessContext, entry: ReplyTileEntry): void {
+  const map = ctx.getConfigService()?.get('replySuggestSessions') as
+    Record<string, { autoSend?: boolean } | undefined> | undefined
+  if (map?.[entry.sessionId]?.autoSend !== true) return
+
+  const batch = entry.batches?.[entry.batches.length - 1]
+  const text = batch?.suggestions?.[0] ?? entry.suggestions?.[0]
+  if (!text) return
+  autoReplyService.enqueue(entry.sessionId, entry.sessionName, text, batch?.id)
 }
 
 export function registerWindowHandlers(ctx: MainProcessContext): void {
@@ -153,6 +171,7 @@ export function registerWindowHandlers(ctx: MainProcessContext): void {
 
   // 磁贴后台生成服务 + 启动时按全局开关恢复
   replyTileService.init(ctx)
+  autoReplyService.setContext(ctx)
   if (supportsReplyTileWindow() && ctx.getConfigService()?.get('replyTileEnabled') === true) {
     ctx.getWindowManager().setReplyTileEnabled(true)
     replyTileService.setRunning(true)
@@ -163,6 +182,7 @@ export function registerWindowHandlers(ctx: MainProcessContext): void {
     // gone 只能删除「配置里已不参与」的会话；切会话/配置加载瞬间的误发不能删全局条目。
     if (entry.state === 'gone' && replyTileService.isParticipating(entry.sessionId)) return
     ctx.getWindowManager().updateReplyTileEntry(entry)
+    if (entry.state === 'ready') autoEnqueueFromRenderer(ctx, entry)
   })
 
   ipcMain.on('reply-tile:continue', (_event, sessionId: string) => {
@@ -179,6 +199,15 @@ export function registerWindowHandlers(ctx: MainProcessContext): void {
     replyTileService.retrySuggestion(payload.sessionId, payload.batchId, payload.suggestionIndex)
     ctx.broadcastToWindows('reply-tile:retry', payload)
   })
+
+  ipcMain.handle('reply-tile:fill', (_event, payload: { text: string; searchName?: string }) =>
+    fillWeChatInput(payload.text, payload.searchName))
+
+  ipcMain.handle('reply-tile:commit', () => commitWeChatInput())
+
+  ipcMain.on('reply-tile:auto-cancel', () => autoReplyService.cancelCurrent())
+  ipcMain.on('reply-tile:auto-clear', () => autoReplyService.clearQueue())
+  ipcMain.on('reply-tile:auto-resume', () => autoReplyService.resume())
 
   ipcMain.handle('window:setReplyTileEnabled', (_event, enabled: boolean) => {
     const on = Boolean(enabled)
@@ -235,6 +264,15 @@ export function registerWindowHandlers(ctx: MainProcessContext): void {
 
   ipcMain.handle('window:openPersonaChatWindow', async (_event, sessionId: string) => {
     ctx.getWindowManager().openPersonaChatWindow(String(sessionId || '').trim())
+    return true
+  })
+
+  ipcMain.handle('window:openChatSummaryWindow', async (_event, sessionId: string, displayName: string, range: string) => {
+    ctx.getWindowManager().openChatSummaryWindow(
+      String(sessionId || '').trim(),
+      String(displayName || '').trim(),
+      String(range || '').trim()
+    )
     return true
   })
 

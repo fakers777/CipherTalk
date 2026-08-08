@@ -1,0 +1,99 @@
+.chat-summary-window {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+}
+
+.chat-summary-titlebar {
+    position: relative;
+    flex: 0 0 auto;
+    height: var(--window-chrome-height, 40px);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    -webkit-app-region: drag;
+}
+
+.chat-summary-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-summary-avatar {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.chat-summary-avatar--fallback {
+    display: grid;
+    place-items: center;
+    background: var(--bg-tertiary, rgba(127, 127, 127, .2));
+    font-size: 11px;
+}
+
+.chat-summary-range {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.chat-summary-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    -webkit-app-region: no-drag;
+}
+
+.chat-summary-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 16px 4px;
+}
+
+.chat-summary-cached-at {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.chat-summary-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.chat-summary-error {
+    color: #e81123;
+    font-size: 12px;
+    white-space: pre-wrap;
+}
+
+.chat-summary-footer {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 12px 12px;
+    -webkit-app-region: no-drag;
+}
+
+.chat-summary-empty {
+    display: grid;
+    place-items: center;
+    height: 100vh;
+    color: var(--text-secondary);
+}

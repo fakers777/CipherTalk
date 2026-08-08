@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { CircleDashed } from '@gravity-ui/icons'
 import { sentenceSegmentLabel, splitSuggestionBursts } from './chat/replySuggest'
+import type { ReplyTileAutoStatus } from '../types/electron'
 import './reply-tile.css'
 
 /**
  * 回复建议磁贴窗口：贴在微信主窗口右侧（放不下翻到左侧），高度跟随微信。
  * 位置/显隐由主进程 windowManager 的跟踪循环控制；本页聚合各参与会话的建议，顶部可切换会话。
  */
+
+const FILL_FAIL_HINT: Record<string, string> = {
+  'no-window': '没找到微信窗口',
+  'focus-failed': '微信没能激活',
+  unsupported: '当前系统不支持',
+  busy: '上一条还在填入',
+  'no-permission': '需在系统设置里授予辅助功能权限',
+}
 
 type TileState = 'pending' | 'loading' | 'error' | 'ready' | 'gone'
 type TileEntry = {
@@ -31,8 +40,11 @@ export default function ReplyTileWindow() {
   const [selected, setSelected] = useState<string | null>(null)
   const selectedRef = useRef<string | null>(null)
   selectedRef.current = selected
-  const [copied, setCopied] = useState<string | null>(null)
+  const [hint, setHint] = useState<{ tag: string; text: string } | null>(null)
   const [retrying, setRetrying] = useState<string | null>(null)
+  // 全自动的排队/倒计时/熔断全在主进程 autoReplyService，这里只显示它推来的状态
+  const [autoStatus, setAutoStatus] = useState<ReplyTileAutoStatus | null>(null)
+  useEffect(() => window.electronAPI.window.replyTile.onAutoStatus(setAutoStatus), [])
 
   useEffect(() => {
     const root = document.getElementById('root')
@@ -76,11 +88,18 @@ export default function ReplyTileWindow() {
     }
   }, [])
 
-  const handleCopy = (text: string, tag: string) => {
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(tag)
-      window.setTimeout(() => setCopied((c) => (c === tag ? null : c)), 1200)
-    })
+  const showHint = (tag: string, text: string) => {
+    setHint({ tag, text })
+    window.setTimeout(() => setHint((h) => (h?.tag === tag ? null : h)), 1600)
+  }
+
+  /**
+   * 手动挑一句：聚焦微信 → Ctrl+F 跳到该会话 → 粘贴。回车留给人自己按。
+   * 全自动那条路不经过这里，由主进程 autoReplyService 排队发送。
+   */
+  const handleSend = async (text: string, tag: string, sessionName?: string) => {
+    const result = await window.electronAPI.window.replyTile.fill({ text, searchName: sessionName })
+    showHint(tag, result.ok ? '已填入' : (FILL_FAIL_HINT[result.reason || ''] || '填入失败'))
   }
 
   const handleContinue = (sessionId: string) => {
@@ -109,6 +128,40 @@ export default function ReplyTileWindow() {
       <div className="reply-tile__header">
         <span className="reply-tile__title">回复建议</span>
       </div>
+
+      {autoStatus && autoStatus.phase === 'counting' && (
+        <div className="reply-tile__pending">
+          <span>
+            {autoStatus.sessionName}：{autoStatus.secondsLeft} 秒后自动发送
+            {autoStatus.queued > 0 && `（另有 ${autoStatus.queued} 条排队）`}
+          </span>
+          <button
+            className="reply-tile__action"
+            type="button"
+            onClick={() => window.electronAPI.window.replyTile.autoCancel()}
+          >撤销</button>
+        </div>
+      )}
+
+      {autoStatus && autoStatus.phase === 'sending' && (
+        <div className="reply-tile__pending">
+          <span>
+            正在发给 {autoStatus.sessionName}
+            {autoStatus.segTotal > 1 && `（第 ${autoStatus.segIndex + 1}/${autoStatus.segTotal} 句）`}
+          </span>
+        </div>
+      )}
+
+      {autoStatus && autoStatus.phase === 'halted' && (
+        <div className="reply-tile__pending reply-tile__pending--error">
+          <span>{autoStatus.sessionName}：{autoStatus.error}</span>
+          <button
+            className="reply-tile__action"
+            type="button"
+            onClick={() => window.electronAPI.window.replyTile.autoResume()}
+          >知道了</button>
+        </div>
+      )}
 
       {entries.length === 0 ? (
         <div className="reply-tile__empty">在聊天窗口开启「磁贴窗口」参与后，这里会显示回复建议</div>
@@ -159,12 +212,12 @@ export default function ReplyTileWindow() {
                             className="reply-tile__seg"
                             key={tag}
                             type="button"
-                            title={segs.length > 1 ? `点击复制${label}` : '点击复制'}
-                            onClick={() => handleCopy(seg, tag)}
+                            title={segs.length > 1 ? `点击填入微信${label}` : '点击填入微信'}
+                            onClick={() => void handleSend(seg, tag, current?.sessionName)}
                           >
                             {segs.length > 1 && <span className="reply-tile__seg-index">{label}</span>}
                             <span className="reply-tile__seg-text">{seg}</span>
-                            {copied === tag && <span className="reply-tile__copied">已复制</span>}
+                            {hint?.tag === tag && <span className="reply-tile__copied">{hint.text}</span>}
                           </button>
                         )
                       })}

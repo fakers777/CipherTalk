@@ -347,7 +347,9 @@ export function parseVideoMd5(content: string): string | undefined {
       extractXmlAttribute(content, 'videomsg', 'rawmd5') ||
       undefined
 
-    return md5?.toLowerCase()
+    const result = md5?.toLowerCase()
+    // 过滤无效值：空字符串、"null"、非32位十六进制
+    return (result && result !== 'null' && /^[a-f0-9]{32}$/.test(result)) ? result : undefined
   } catch {
     return undefined
   }

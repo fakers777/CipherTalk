@@ -86,16 +86,25 @@ GitHub Release 资产包括：
    - `force-update.json`
 10. 向 Telegram 频道/群发送发布通知（AI 摘要 + 强制更新提醒）
 
-## Windows 全量更新
+## Windows / macOS 全量更新
 
-当前 Windows 自动更新统一使用全量安装包下载。
+当前 Windows 和 macOS 自动更新统一使用全量更新包下载。
 
-依赖产物为：
+Windows 依赖产物为：
 
 - `CipherTalk-x.y.z-Setup.exe`
 - `latest.yml`
 
-工作流会在构建与发布阶段校验安装包和 `latest.yml` 的哈希是否一致，避免元数据与真实安装包不匹配。
+macOS 依赖产物为：
+
+- `CipherTalk-x.y.z-Setup.dmg`（手动安装）
+- `CipherTalk-x.y.z-Setup.zip`（自动更新）
+- `latest-mac.yml`
+
+macOS 的 `electron-updater` `MacUpdater` 只接受 ZIP 更新包，不能把 DMG
+写入 `latest-mac.yml` 的更新文件项；发布流程会同时上传 DMG 和 ZIP，清单只指向 ZIP。
+
+工作流会在构建与发布阶段校验安装包、更新包和对应清单的哈希是否一致，避免元数据与真实文件不匹配。
 
 说明：
 

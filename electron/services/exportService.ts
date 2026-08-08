@@ -1,4 +1,4 @@
-﻿import * as fs from 'fs'
+import * as fs from 'fs'
 import * as path from 'path'
 import * as https from 'https'
 import * as http from 'http'
@@ -13,6 +13,7 @@ import { wcdbService } from './wcdbService'
 import { findMessageDbPaths, findDbByName, getDbStoragePath } from './dbStoragePaths'
 import { snsService, isVideoUrl, type SnsPost, type SnsShareInfo } from './snsService'
 import { parseQuoteMessage } from './chat/contentParsers'
+import { localPathFromFileUrl } from './fileUrlPath'
 
 // ChatLab 0.0.2 格式类型定义
 export interface ChatLabHeader {
@@ -868,6 +869,10 @@ class ExportService {
           }
       }
 
+      if (allMessages.length === 0) {
+        return { success: false, error: '没有消息可导出' }
+      }
+
       // 按时间排序
       allMessages.sort((a, b) => a.createTime - b.createTime)
 
@@ -991,15 +996,6 @@ class ExportService {
             }
 
             chatRecords.push(chatRecord)
-
-            // 添加成员信息
-            if (record.sourcename && !memberSet.has(record.sourcename)) {
-              memberSet.set(record.sourcename, {
-                platformId: record.sourcename,
-                accountName: record.sourcename,
-                ...(options.exportAvatars && record.sourceheadurl && { avatar: record.sourceheadurl })
-              })
-            }
           }
 
           message.chatRecords = chatRecords
@@ -1594,6 +1590,10 @@ class ExportService {
           }
       }
 
+      if (allMessages.length === 0) {
+        return { success: false, error: '没有消息可导出' }
+      }
+
       // 按时间排序
       allMessages.sort((a, b) => a.createTime - b.createTime)
 
@@ -2010,19 +2010,6 @@ class ExportService {
                 avatar: options.exportAvatars ? senderInfo.avatarUrl : undefined
               })
             }
-
-            // 收集聊天记录中的成员
-            if (chatRecordList) {
-              for (const record of chatRecordList) {
-                if (record.sourcename && !memberSet.has(record.sourcename)) {
-                  memberSet.set(record.sourcename, {
-                    id: record.sourcename,
-                    name: record.sourcename,
-                    avatar: options.exportAvatars ? record.sourceheadurl : undefined
-                  })
-                }
-              }
-            }
           }
           expStep('HTML: 读取会话消息(下一页)')
       }
@@ -2214,6 +2201,10 @@ class ExportService {
           }
       }
 
+      if (allMessages.length === 0) {
+        return { success: false, error: '没有消息可导出' }
+      }
+
       // 按时间排序
       allMessages.sort((a, b) => a.createTime - b.createTime)
 
@@ -2382,6 +2373,7 @@ class ExportService {
   ): Promise<{ success: boolean; successCount: number; failCount: number; error?: string; outputPaths?: string[] }> {
     let successCount = 0
     let failCount = 0
+    const failErrors: string[] = []
     const outputPathSet = new Set<string>()
 
     expWatchdogStart()
@@ -2490,6 +2482,7 @@ class ExportService {
           outputPathSet.add(outputPath)
         } else {
           failCount++
+          if (result.error) failErrors.push(result.error)
           console.error(`导出 ${sessionId} 失败:`, result.error)
         }
 
@@ -2513,7 +2506,10 @@ class ExportService {
         detail: '导出完成'
       })
 
-      return { success: true, successCount, failCount, outputPaths: Array.from(outputPathSet) }
+      const aggregatedError = failErrors.length > 0
+        ? [...new Set(failErrors)].join('；')
+        : undefined
+      return { success: successCount > 0, successCount, failCount, error: aggregatedError, outputPaths: Array.from(outputPathSet) }
     } catch (e) {
       return { success: false, successCount, failCount, error: String(e), outputPaths: Array.from(outputPathSet) }
     } finally {
@@ -2866,11 +2862,8 @@ class ExportService {
                   if (__dtImg > 1000) expLog(`慢图片 ${imageMd5 || imageDatName}: ${__dtImg}ms (success=${cacheResult.success})`)
 
                   if (cacheResult.success && cacheResult.localPath) {
-                    // localPath 是 file:///path?v=xxx 格式，转为本地路径
-                    let filePath = cacheResult.localPath
-                      .replace(/\?v=\d+$/, '')
-                      .replace(/^file:\/\/\//i, '')
-                    filePath = decodeURIComponent(filePath)
+                    // localPath 是 file:///path?v=xxx；必须用 fileURLToPath，勿 strip file:///（会丢掉 macOS 路径前导 /）
+                    const filePath = localPathFromFileUrl(cacheResult.localPath)
 
                     if (fs.existsSync(filePath)) {
                       const ext = path.extname(filePath) || '.jpg'
@@ -2896,25 +2889,27 @@ class ExportService {
             if (options.exportVideos && localType === 43) {
               try {
                 const videoMd5 = videoService.parseVideoMd5(content)
-                if (videoMd5) {
-                  expStep(`视频查找 ${videoMd5} (localId=${row.local_id})`)
-                  const __tVid = Date.now()
-                  const videoInfo = await videoService.getVideoInfo(videoMd5, content)
-                  const __dtVid = Date.now() - __tVid
-                  if (__dtVid > 1000) expLog(`慢视频 ${videoMd5}: ${__dtVid}ms (exists=${videoInfo.exists})`)
-                  if (videoInfo.exists && videoInfo.videoUrl) {
-                    const videoPath = videoInfo.videoUrl.replace(/^file:\/\/\//i, '').replace(/\//g, path.sep)
-                    if (fs.existsSync(videoPath)) {
-                      const fileName = `${createTime}_${videoMd5}.mp4`
-                      const df = this.dateFolder(createTime)
-                      const dayDir = path.join(videoOutDir, df)
-                      if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true })
-                      const destPath = path.join(dayDir, fileName)
-                      if (!fs.existsSync(destPath)) {
-                        fs.copyFileSync(videoPath, destPath)
-                        videoCount++
-                        mediaPathMap.set(createTime, `videos/${df}/${fileName}`)
-                      }
+                // 无 MD5 视频也尝试导出：videoService.getVideoInfo 内部会用文件大小 fallback
+                const lookupKey = videoMd5 || ''
+                expStep(`视频查找 ${lookupKey || '(无MD5)'} (localId=${row.local_id})`)
+                const __tVid = Date.now()
+                const videoInfo = await videoService.getVideoInfo(lookupKey, content)
+                const __dtVid = Date.now() - __tVid
+                if (__dtVid > 1000) expLog(`慢视频 ${lookupKey || '(无MD5)'}: ${__dtVid}ms (exists=${videoInfo.exists})`)
+                if (videoInfo.exists && videoInfo.videoUrl) {
+                  const videoPath = localPathFromFileUrl(videoInfo.videoUrl)
+                  if (fs.existsSync(videoPath)) {
+                    // 文件名兜底：优先 MD5，其次命中 matchedMd5，最后用 localId
+                    const nameKey = videoMd5 || videoInfo.diagnostics?.matchedMd5 || `local_${row.local_id}`
+                    const fileName = `${createTime}_${nameKey}.mp4`
+                    const df = this.dateFolder(createTime)
+                    const dayDir = path.join(videoOutDir, df)
+                    if (!fs.existsSync(dayDir)) fs.mkdirSync(dayDir, { recursive: true })
+                    const destPath = path.join(dayDir, fileName)
+                    if (!fs.existsSync(destPath)) {
+                      fs.copyFileSync(videoPath, destPath)
+                      videoCount++
+                      mediaPathMap.set(createTime, `videos/${df}/${fileName}`)
                     }
                   }
                 }

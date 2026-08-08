@@ -21,7 +21,8 @@ export interface MonitorChangePayload {
 function classifyByFileName(fileName: string): ChangeTable {
   const lower = fileName.toLowerCase()
   if (/^session\.db-(wal|shm)$/.test(lower)) return 'Session'
-  if (/^(msg|message)_.*\.db-(wal|shm)$/.test(lower)) return 'Message'
+  // 公众号消息在 biz_message_*.db，漏掉会导致公众号来新消息时收不到 Message 变更、不实时刷新
+  if (/^(msg|message|biz_message)_.*\.db-(wal|shm)$/.test(lower)) return 'Message'
   if (/^contact\.db-(wal|shm)$/.test(lower)) return 'Contact'
   if (/^sns\.db-(wal|shm)$/.test(lower)) return 'Sns'
   return 'Unknown'
@@ -30,7 +31,8 @@ function classifyByFileName(fileName: string): ChangeTable {
 function classifyByTableName(raw: string): ChangeTable {
   const t = String(raw || '').trim().toLowerCase()
   if (t === 'session') return 'Session'
-  if (t === 'message' || t.startsWith('msg')) return 'Message'
+  // native 事件可能给表名（Msg_<md5>，已被 startsWith('msg') 覆盖）也可能给库名（biz_message_0）
+  if (t === 'message' || t.startsWith('msg') || t.startsWith('biz_message')) return 'Message'
   if (t === 'contact') return 'Contact'
   if (t === 'sns') return 'Sns'
   return 'Unknown'

@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Tooltip } from '@heroui/react'
 import { ArrowRotateLeft, ArrowRotateRight, ChevronLeft, ChevronRight, MagnifierMinus, MagnifierPlus } from '@gravity-ui/icons'
 import { LivePhotoIcon } from '../components/LivePhotoIcon'
+import { GlassWindowControls } from '../components/GlassWindowControls'
 import type { ImageListItem } from '../types/electron'
 import { createLiquidGlassMap, type GlassFilterMap } from '../utils/liquidGlass'
 import './ImageWindow.css'
@@ -517,10 +518,6 @@ export default function ImageWindow() {
                 )}
             </svg>
 
-            <div className="title-bar">
-                <div className="window-drag-area" aria-hidden="true"></div>
-            </div>
-
             <div className="bottom-toolbar-shell">
                 <div
                     className="bottom-toolbar"
@@ -557,7 +554,9 @@ export default function ImageWindow() {
                         </Tooltip.Trigger>
                         <Tooltip.Content placement="top">缩小（-）</Tooltip.Content>
                     </Tooltip>
-                    <span className="scale-text">{Math.round(displayScale * 100)}%</span>
+                    {/* ponytail: 以「适配窗口」为 100% 基准，打开永远是 100%；
+                        displayScale(相对原图像素)每张图都不同，用户看着像 bug */}
+                    <span className="scale-text">{Math.round(scale * 100)}%</span>
                     <Tooltip delay={0} closeDelay={60}>
                         <Tooltip.Trigger>
                             <button onClick={handleZoomIn} aria-label="放大">
@@ -642,6 +641,13 @@ export default function ImageWindow() {
                         )}
                     </>
                 )}
+            </div>
+
+            {/* ponytail: 必须排在 .image-viewport(全屏 no-drag) 之后，
+                draggable region 按 DOM 顺序累积，前置会被后面的 no-drag 挖掉 */}
+            <div className="title-bar">
+                <div className="window-drag-area" aria-hidden="true"></div>
+                <GlassWindowControls />
             </div>
         </div>
     )

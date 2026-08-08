@@ -4,6 +4,7 @@
  * - xiaomi-mimo-tts：小米 MiMo V2.5 TTS 专用 /chat/completions，按 api-key + audio 参数直连 fetch
  * - volcengine-bidirectional：火山引擎/豆包 V3 WebSocket 双向流式接口，普通合成返回完整音频，播放链路可边收边播
  * - aliyun-qwen-realtime：通义千问/百炼实时 WebSocket，接收 PCM 分片边播边收，结束后包装 WAV 缓存
+ * - stepfun-speech：阶跃星辰 /audio/speech，Bearer key + 直接返回二进制音频
  * 每个服务商配置独立保存在 providers 下，切换服务商不会覆盖另一套 key/model/voice。
  * 可在主进程与 AI 子进程复用（ConfigService 在两边都能解析路径）。
  */
@@ -27,8 +28,8 @@ import {
 } from './aliyunQwenTtsProtocol'
 import { VOLCENGINE_DEFAULT_TTS_ENDPOINT, synthesizeViaVolcengineBidirectional } from './volcengineTtsProtocol'
 
-export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen'
-export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+export type TtsProviderId = 'xiaomi' | 'volcengine' | 'aliyun-qwen' | 'stepfun'
+export type TtsProtocol = 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
 
 export interface TtsProviderConfig {
   protocol: TtsProtocol
@@ -121,6 +122,12 @@ const ALIYUN_QWEN_MODEL_DEFAULT_VOICES: Record<string, string> = {
 
 const ALIYUN_QWEN_SYSTEM_VOICES = new Set(['Cherry', 'Serena', 'Ethan', 'Chelsie'])
 
+const STEPFUN_DEFAULT_BASE_URL = 'https://api.stepfun.com/v1'
+const STEPFUN_DEFAULT_MODEL = 'stepaudio-2.5-tts'
+const STEPFUN_DEFAULT_VOICE = 'linjiajiejie'
+/** 只有 stepaudio-2.5-tts 接受 instruction（上限 200 字） */
+const STEPFUN_INSTRUCTION_MODELS = new Set([STEPFUN_DEFAULT_MODEL])
+
 const DEFAULT_XIAOMI_TTS_PROVIDER: TtsProviderConfig = {
   protocol: 'xiaomi-mimo-tts',
   apiKey: '',
@@ -153,10 +160,21 @@ const DEFAULT_ALIYUN_QWEN_TTS_PROVIDER: TtsProviderConfig = {
   speed: 1,
 }
 
+const DEFAULT_STEPFUN_TTS_PROVIDER: TtsProviderConfig = {
+  protocol: 'stepfun-speech',
+  apiKey: '',
+  baseURL: STEPFUN_DEFAULT_BASE_URL,
+  model: STEPFUN_DEFAULT_MODEL,
+  voice: STEPFUN_DEFAULT_VOICE,
+  instructions: '',
+  speed: 1,
+}
+
 const DEFAULT_TTS_PROVIDERS: Record<TtsProviderId, TtsProviderConfig> = {
   xiaomi: DEFAULT_XIAOMI_TTS_PROVIDER,
   volcengine: DEFAULT_VOLCENGINE_TTS_PROVIDER,
   'aliyun-qwen': DEFAULT_ALIYUN_QWEN_TTS_PROVIDER,
+  stepfun: DEFAULT_STEPFUN_TTS_PROVIDER,
 }
 
 const DEFAULT_TTS_CONFIG: TtsConfig = {
@@ -167,6 +185,7 @@ const DEFAULT_TTS_CONFIG: TtsConfig = {
     xiaomi: { ...DEFAULT_XIAOMI_TTS_PROVIDER },
     volcengine: { ...DEFAULT_VOLCENGINE_TTS_PROVIDER },
     'aliyun-qwen': { ...DEFAULT_ALIYUN_QWEN_TTS_PROVIDER },
+    stepfun: { ...DEFAULT_STEPFUN_TTS_PROVIDER },
   },
 }
 
@@ -251,14 +270,26 @@ function normalizeAliyunQwenTtsConfig(cfg: TtsProviderConfig): TtsProviderConfig
   return { ...cfg, baseURL, model, voice }
 }
 
+function normalizeStepfunTtsConfig(cfg: TtsProviderConfig): TtsProviderConfig {
+  if (cfg.protocol !== 'stepfun-speech') return cfg
+
+  const baseURL = normalizeTtsBaseURL(cfg.baseURL) || STEPFUN_DEFAULT_BASE_URL
+  const model = String(cfg.model || '').trim() || STEPFUN_DEFAULT_MODEL
+  const voice = String(cfg.voice || '').trim() || STEPFUN_DEFAULT_VOICE
+
+  if (baseURL === cfg.baseURL && model === cfg.model && voice === cfg.voice) return cfg
+  return { ...cfg, baseURL, model, voice }
+}
+
 function getProviderIdForProtocol(protocol: unknown): TtsProviderId {
   if (protocol === 'volcengine-bidirectional') return 'volcengine'
   if (protocol === 'aliyun-qwen-realtime') return 'aliyun-qwen'
+  if (protocol === 'stepfun-speech') return 'stepfun'
   return 'xiaomi'
 }
 
 function normalizeProviderId(provider: unknown, fallback: TtsProviderId = 'xiaomi'): TtsProviderId {
-  return provider === 'volcengine' || provider === 'xiaomi' || provider === 'aliyun-qwen'
+  return provider === 'volcengine' || provider === 'xiaomi' || provider === 'aliyun-qwen' || provider === 'stepfun'
     ? provider
     : fallback
 }
@@ -280,6 +311,7 @@ function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsPro
   }
   if (provider === 'volcengine') return normalizeVolcengineTtsConfig(merged)
   if (provider === 'aliyun-qwen') return normalizeAliyunQwenTtsConfig(merged)
+  if (provider === 'stepfun') return normalizeStepfunTtsConfig(merged)
   return normalizeXiaomiMimoTtsConfig(merged)
 }
 
@@ -298,6 +330,7 @@ function normalizeTtsConfig(raw: Partial<TtsConfig> = {}): TtsConfig {
     xiaomi: normalizeProviderConfig('xiaomi', rawProviders.xiaomi),
     volcengine: normalizeProviderConfig('volcengine', rawProviders.volcengine),
     'aliyun-qwen': normalizeProviderConfig('aliyun-qwen', rawProviders['aliyun-qwen']),
+    stepfun: normalizeProviderConfig('stepfun', rawProviders.stepfun),
   }
 
   if (hasFlatProviderPatch(raw)) {
@@ -480,6 +513,7 @@ export function isTtsAvailable(cfg: TtsConfig = getTtsConfig()): boolean {
     Boolean(cfg.apiKey) &&
     Boolean(cfg.model) &&
     (cfg.protocol !== 'volcengine-bidirectional' || Boolean(cfg.voice)) &&
+    (cfg.protocol !== 'stepfun-speech' || Boolean(cfg.voice)) &&
     (!needsAliyunQwenVoice || Boolean(cfg.voice)) &&
     (!needsXiaomiVoice || Boolean(cfg.voice))
 }
@@ -489,6 +523,7 @@ function validateTtsConfig(cfg: TtsConfig): string | null {
   if (!cfg.model) return '未配置 TTS 模型'
   if (cfg.protocol === 'volcengine-bidirectional' && !cfg.voice) return '未配置火山引擎音色 Speaker'
   if (cfg.protocol === 'aliyun-qwen-realtime' && !cfg.voice) return '未配置通义千问音色 voice'
+  if (cfg.protocol === 'stepfun-speech' && !cfg.voice) return '未配置阶跃星辰音色 voice'
   if (cfg.protocol === 'xiaomi-mimo-tts' && cfg.model !== 'mimo-v2.5-tts-voicedesign' && !cfg.voice) {
     return cfg.model === 'mimo-v2.5-tts-voiceclone'
       ? '未配置小米音色样本 Data URL'
@@ -837,6 +872,50 @@ async function synthesizeViaXiaomiMimoApi(text: string, cfg: TtsConfig, signal?:
   return { success: false, error: `小米接口返回成功但没有音频数据（message.audio.data/url 均为空）：${preview}`, errorCode: 'SYNTHESIS_FAILED' }
 }
 
+/** stepfun-speech：阶跃星辰 /audio/speech，Bearer key，直接返回音频二进制。 */
+async function synthesizeViaStepfunApi(text: string, cfg: TtsConfig, signal?: AbortSignal): Promise<TtsSynthesisResult> {
+  const fetchImpl = createProxyFetch(getResolvedProxyUrl()) || fetch
+  const base = normalizeTtsBaseURL(cfg.baseURL) || STEPFUN_DEFAULT_BASE_URL
+  const endpoint = /\/audio\/speech$/i.test(base) ? base : `${base}/audio/speech`
+  const model = String(cfg.model || STEPFUN_DEFAULT_MODEL).trim()
+  const instruction = STEPFUN_INSTRUCTION_MODELS.has(model)
+    ? normalizeTtsInstructions(cfg.instructions).slice(0, 200)
+    : ''
+
+  const response = await fetchImpl(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${cfg.apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice: cfg.voice || STEPFUN_DEFAULT_VOICE,
+      response_format: 'mp3',
+      speed: Math.min(Math.max(normalizeTtsSpeed(cfg.speed), 0.5), 2),
+      ...(instruction ? { instruction } : {}),
+    }),
+    signal,
+  }) as Response
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    return { success: false, error: `HTTP ${response.status} · ${detail.slice(0, 300) || response.statusText}`, errorCode: 'SYNTHESIS_FAILED' }
+  }
+
+  const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || ''
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (contentType.includes('json') || buffer.length === 0) {
+    return { success: false, error: `阶跃星辰未返回音频：${buffer.toString('utf8').slice(0, 300) || '空响应'}`, errorCode: 'SYNTHESIS_FAILED' }
+  }
+  return {
+    success: true,
+    audioBase64: buffer.toString('base64'),
+    mimeType: contentType.startsWith('audio/') ? contentType : 'audio/mpeg',
+  }
+}
+
 function canUseLowLatencyStreaming(cfg: TtsConfig): boolean {
   if (cfg.protocol === 'aliyun-qwen-realtime') return true
   if (cfg.protocol === 'volcengine-bidirectional') return true
@@ -1105,6 +1184,9 @@ export async function synthesizeSpeech(
     }
     if (cfg.protocol === 'volcengine-bidirectional') {
       return synthesizeViaVolcengineApi(input, cfg, controller.signal)
+    }
+    if (cfg.protocol === 'stepfun-speech') {
+      return synthesizeViaStepfunApi(input, cfg, controller.signal)
     }
     return synthesizeViaXiaomiMimoApi(input, cfg, controller.signal)
   }

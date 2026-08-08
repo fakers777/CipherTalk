@@ -4,12 +4,12 @@ const path = require('path')
 const releaseDir = path.join(__dirname, '../release')
 
 function getArtifactName(content) {
-  const pathMatch = content.match(/path:\s*(.+\.(exe|dmg))/)
+  const pathMatch = content.match(/path:\s*(.+\.(exe|dmg|zip))/)
   if (pathMatch) {
     return pathMatch[1].trim()
   }
 
-  const urlMatch = content.match(/-\s+url:\s*(.+\.(exe|dmg))/)
+  const urlMatch = content.match(/-\s+url:\s*(.+\.(exe|dmg|zip))/)
   if (urlMatch) {
     return urlMatch[1].trim()
   }

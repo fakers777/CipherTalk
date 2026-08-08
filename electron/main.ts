@@ -314,6 +314,10 @@ if (gotSingleInstanceLock) {
       }
     }
 
+    // 菜单必须等窗口编排结束再注册：⌘, 会走 focusMainWindow() 建窗口，
+    // 提前注册会和上面的 createMainWindow() 撞成两个主窗口，还会覆盖 Context 里的窗口/服务引用。
+    ctx.getWindowManager().setupApplicationMenu()
+
     // 启动后台同步放在窗口编排之后，避免启动连接数据库时抢占磁盘 IO。
     markStartupMilestone('startup:background-sync-start')
     startBackgroundSync(ctx)

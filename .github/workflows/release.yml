@@ -121,6 +121,9 @@ jobs:
       - name: Refresh models.dev snapshot
         run: npm run build:models-snapshot
 
+      - name: Refresh models.dev logo snapshot
+        run: npm run build:models-logos
+
       - name: Build app
         run: npm run build:win
 
@@ -189,6 +192,9 @@ jobs:
       - name: Refresh models.dev snapshot
         run: npm run build:models-snapshot
 
+      - name: Refresh models.dev logo snapshot
+        run: npm run build:models-logos
+
       - name: Build mac app
         run: npm run build:mac
 
@@ -196,8 +202,13 @@ jobs:
         run: |
           version="${{ needs.prepare-meta.outputs.version }}"
           dmg="release/CipherTalk-${version}-Setup.dmg"
+          zip="release/CipherTalk-${version}-Setup.zip"
           if [ ! -f "$dmg" ]; then
             echo "DMG not found: $dmg" >&2
+            exit 1
+          fi
+          if [ ! -f "$zip" ]; then
+            echo "ZIP not found: $zip" >&2
             exit 1
           fi
 
@@ -207,6 +218,7 @@ jobs:
           name: release-binaries-macos
           path: |
             release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.dmg
+            release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.zip
             release/latest-mac.yml
           if-no-files-found: error
 
@@ -297,12 +309,17 @@ jobs:
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $installer = "release/CipherTalk-$version-Setup.exe"
           $macInstaller = "release/CipherTalk-$version-Setup.dmg"
+          $macArchive = "release/CipherTalk-$version-Setup.zip"
           if (-not (Test-Path $installer)) {
             Write-Error "Installer not found: $installer"
             exit 1
           }
           if (-not (Test-Path $macInstaller)) {
             Write-Error "macOS installer not found: $macInstaller"
+            exit 1
+          }
+          if (-not (Test-Path $macArchive)) {
+            Write-Error "macOS update archive not found: $macArchive"
             exit 1
           }
           if (-not (Test-Path "release/latest.yml")) {
@@ -359,7 +376,7 @@ jobs:
             exit 1
           }
 
-          $macHashHex = (Get-FileHash -Algorithm SHA512 $macInstaller).Hash
+          $macHashHex = (Get-FileHash -Algorithm SHA512 $macArchive).Hash
           $macHashBytes = [byte[]]::new($macHashHex.Length / 2)
           for ($i = 0; $i -lt $macHashHex.Length; $i += 2) {
             $macHashBytes[$i / 2] = [Convert]::ToByte($macHashHex.Substring($i, 2), 16)
@@ -368,7 +385,7 @@ jobs:
           $expectedMacSha512 = $macShaMatch.Groups[1].Value.Trim()
 
           if ($actualMacSha512 -ne $expectedMacSha512) {
-            Write-Error "latest-mac.yml sha512 does not match dmg"
+            Write-Error "latest-mac.yml sha512 does not match macOS update archive"
             exit 1
           }
 
@@ -384,6 +401,7 @@ jobs:
           files: |
             release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.exe
             release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.dmg
+            release/CipherTalk-${{ needs.prepare-meta.outputs.version }}-Setup.zip
             release/latest.yml
             release/latest-mac.yml
             release/force-update.json
@@ -401,6 +419,21 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
+      # checkout 会清空工作区，必须排在 download-artifact 之前
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.12.0
+
+      # models.dev 在国内被墙（DNS 污染 + SNI 阻断），没代理的客户端拉不到模型目录，
+      # 这里镜像一份到 R2（miyuapp.aiqji.com 国内可达）。抓取失败就沿用仓库里的快照。
+      - name: Refresh models.dev snapshot
+        run: npm run build:models-snapshot
+        continue-on-error: true
+
       - name: Download release metadata
         uses: actions/download-artifact@v4
         with:
@@ -443,6 +476,7 @@ jobs:
           $version = "${{ needs.prepare-meta.outputs.version }}"
           $currentInstaller = "CipherTalk-$version-Setup.exe"
           $currentMacInstaller = "CipherTalk-$version-Setup.dmg"
+          $currentMacArchive = "CipherTalk-$version-Setup.zip"
 
           $existingInstallers = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
             $line = $_.ToString().Trim()
@@ -454,6 +488,13 @@ jobs:
           $existingMacInstallers = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
             $line = $_.ToString().Trim()
             if ($line -match 'CipherTalk-.*-Setup\.dmg$') {
+              ($line -split '\s+')[-1]
+            }
+          } | Where-Object { $_ }
+
+          $existingMacArchives = aws s3 ls $bucket --endpoint-url $endpoint | ForEach-Object {
+            $line = $_.ToString().Trim()
+            if ($line -match 'CipherTalk-.*-Setup\.zip$') {
               ($line -split '\s+')[-1]
             }
           } | Where-Object { $_ }
@@ -477,15 +518,23 @@ jobs:
             }
           }
 
+          foreach ($archive in $existingMacArchives) {
+            if ($archive -ne $currentMacArchive) {
+              aws s3 rm "$bucket/$archive" --endpoint-url $endpoint
+            }
+          }
+
           foreach ($blockmap in $existingBlockmaps) {
             aws s3 rm "$bucket/$blockmap" --endpoint-url $endpoint
           }
 
           aws s3 cp "release/$currentInstaller" "$bucket/$currentInstaller" --endpoint-url $endpoint
           aws s3 cp "release/$currentMacInstaller" "$bucket/$currentMacInstaller" --endpoint-url $endpoint
+          aws s3 cp "release/$currentMacArchive" "$bucket/$currentMacArchive" --endpoint-url $endpoint
           aws s3 cp "release/latest.yml" "$bucket/latest.yml" --endpoint-url $endpoint
           aws s3 cp "release/latest-mac.yml" "$bucket/latest-mac.yml" --endpoint-url $endpoint
           aws s3 cp "release/force-update.json" "$bucket/force-update.json" --endpoint-url $endpoint
+          aws s3 cp "electron/assets/models-dev.json" "$bucket/models-dev.json" --endpoint-url $endpoint --content-type "application/json"
 
   notify-telegram-success:
     runs-on: windows-latest

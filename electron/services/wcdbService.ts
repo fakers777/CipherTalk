@@ -9,7 +9,7 @@ import { EventEmitter } from 'events'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { ConfigService } from './config'
-import { getAppPath, getUserDataPath, isElectronPackaged } from './runtimePaths'
+import { getAppPath, getAppVersion, getUserDataPath, isElectronPackaged } from './runtimePaths'
 import { getElectronWorkerEnv } from './workerEnvironment'
 
 type UtilityRequest = { id: number; type: string; payload?: any }
@@ -279,6 +279,7 @@ export class WcdbService extends EventEmitter {
             ? join(resourcesRoot, 'resources')
             : join(appPath, 'resources')
           const userDataPath = getUserDataPath()
+          const appVersion = getAppVersion()
           const id = ++this.seq
           this.pending.set(id, {
             resolve: () => {
@@ -291,7 +292,7 @@ export class WcdbService extends EventEmitter {
               rejectInitOnce(err instanceof Error ? err : new Error(String(err)))
             }
           })
-          this.postToUtility(worker, { id, type: 'setPaths', payload: { resourcesPath, userDataPath } })
+          this.postToUtility(worker, { id, type: 'setPaths', payload: { resourcesPath, userDataPath, appVersion } })
           return
         }
 

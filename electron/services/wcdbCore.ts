@@ -27,6 +27,7 @@ export class WcdbCore {
   private currentDbStoragePath: string | null = null
   private resourcesPath: string | null = null
   private userDataPath: string | null = null
+  private appVersion = ''
 
   // 已暴露的 C 符号
   private wcdbInit: any = null
@@ -46,6 +47,7 @@ export class WcdbCore {
   private wcdbStopMonitorPipe: any = null
   private wcdbGetMonitorPipeName: any = null
   private wcdbSetMyWxid: any = null
+  private wcdbSetAppVersion: any = null
 
   // 管道监控状态
   private monitorPipeClient: any = null
@@ -53,9 +55,10 @@ export class WcdbCore {
   private monitorReconnectTimer: any = null
   private monitorPipePath: string = ''
 
-  setPaths(resourcesPath: string, userDataPath: string): void {
+  setPaths(resourcesPath: string, userDataPath: string, appVersion = ''): void {
     this.resourcesPath = resourcesPath
     this.userDataPath = userDataPath
+    this.appVersion = appVersion
   }
 
   getUserDataPath(): string | null { return this.userDataPath }
@@ -134,6 +137,13 @@ export class WcdbCore {
       this.wcdbStopMonitorPipe = tryBind('int32 wcdb_stop_monitor_pipe()')
       this.wcdbGetMonitorPipeName = tryBind('int32 wcdb_get_monitor_pipe_name(_Out_ void** outName)')
       this.wcdbSetMyWxid = tryBind('int32 wcdb_set_my_wxid(int64 handle, const char* wxid)')
+      this.wcdbSetAppVersion = tryBind('int32 wcdb_set_app_version(const char* version)')
+      if (this.wcdbSetAppVersion) {
+        const setVersionResult = this.wcdbSetAppVersion(this.appVersion)
+        if (setVersionResult !== 0) {
+          return { success: false, error: this.mapStatusCode(setVersionResult) }
+        }
+      }
       const initResult = this.wcdbInit()
       if (initResult !== 0) {
         return { success: false, error: this.mapStatusCode(initResult) }

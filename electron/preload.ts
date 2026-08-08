@@ -220,6 +220,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agent:loadConversation', id) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
     createConversation: (payload: unknown) =>
       ipcRenderer.invoke('agent:createConversation', payload) as Promise<{ success: boolean; conversation?: unknown; error?: string }>,
+    // 聊天摘要缓存：同会话+时间范围只存最新一份
+    getChatSummary: (payload: { sessionId: string; range: string }) =>
+      ipcRenderer.invoke('agent:getChatSummary', payload) as Promise<{ success: boolean; summary?: unknown; error?: string }>,
+    saveChatSummary: (payload: { sessionId: string; range: string; displayName?: string; content: string }) =>
+      ipcRenderer.invoke('agent:saveChatSummary', payload) as Promise<{ success: boolean; error?: string }>,
     deleteConversation: (idOrPayload: number | { id?: number; originClientId?: string | null }) =>
       ipcRenderer.invoke('agent:deleteConversation', idOrPayload) as Promise<{ success: boolean; error?: string }>,
     deleteConversationsByScope: (scope: unknown) =>
@@ -383,7 +388,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteDiary: (date: string) =>
       ipcRenderer.invoke('memory:deleteDiary', date) as Promise<{ success: boolean; error?: string }>,
     summarizeTodayDiary: () =>
-      ipcRenderer.invoke('memory:summarizeTodayDiary') as Promise<{ success: boolean; alreadyExists?: boolean; diary?: unknown; error?: string }>,
+      ipcRenderer.invoke('memory:summarizeTodayDiary') as Promise<{ success: boolean; diary?: unknown; error?: string }>,
     create: (payload: {
       memoryUid?: string
       sourceType?: string
@@ -542,6 +547,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     focusMainWindow: (route?: string) => ipcRenderer.invoke('window:focusMainWindow', route),
     openMomentsWindow: (filterUsername?: string) => ipcRenderer.invoke('window:openMomentsWindow', filterUsername),
     openPersonaChatWindow: (sessionId: string) => ipcRenderer.invoke('window:openPersonaChatWindow', sessionId),
+    openChatSummaryWindow: (sessionId: string, displayName: string, range: string) =>
+      ipcRenderer.invoke('window:openChatSummaryWindow', sessionId, displayName, range),
     openPosterStyleWindow: () => ipcRenderer.invoke('window:openPosterStyleWindow'),
     onMomentsFilterUser: (callback: (username: string) => void) => {
       ipcRenderer.on('moments:filterUser', (_, username) => callback(username))
@@ -578,6 +585,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       continue: (sessionId: string) => ipcRenderer.send('reply-tile:continue', sessionId),
       skip: (sessionId: string) => ipcRenderer.send('reply-tile:skip', sessionId),
       retry: (payload: { sessionId: string; batchId: string; suggestionIndex: number }) => ipcRenderer.send('reply-tile:retry', payload),
+      fill: (payload: { text: string; searchName?: string }) =>
+        ipcRenderer.invoke('reply-tile:fill', payload) as Promise<{ ok: boolean; reason?: string }>,
+      commit: () => ipcRenderer.invoke('reply-tile:commit') as Promise<{ ok: boolean; reason?: string }>,
+      autoCancel: () => ipcRenderer.send('reply-tile:auto-cancel'),
+      autoClear: () => ipcRenderer.send('reply-tile:auto-clear'),
+      autoResume: () => ipcRenderer.send('reply-tile:auto-resume'),
+      onAutoStatus: (callback: (status: unknown) => void) => {
+        const listener = (_e: unknown, status: unknown) => callback(status)
+        ipcRenderer.on('reply-tile:auto-status', listener)
+        return () => ipcRenderer.removeListener('reply-tile:auto-status', listener)
+      },
       onUpdate: (callback: (entry: { sessionId: string; sessionName: string; avatarUrl?: string; state: 'pending' | 'loading' | 'error' | 'ready' | 'gone'; suggestions?: string[]; batches?: Array<{ id: string; targetKey: string; quote: string; suggestions: string[] }>; pendingContinue?: boolean; error?: string }) => void) => {
         const listener = (_: unknown, entry: any) => callback(entry)
         ipcRenderer.on('reply-tile:update', listener)
@@ -637,7 +655,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     killWeChat: () => ipcRenderer.invoke('wxkey:killWeChat'),
     launchWeChat: () => ipcRenderer.invoke('wxkey:launchWeChat'),
     waitForWindow: (maxWaitSeconds?: number) => ipcRenderer.invoke('wxkey:waitForWindow', maxWaitSeconds),
-    startGetKey: (customWechatPath?: string, dbPath?: string) => ipcRenderer.invoke('wxkey:startGetKey', customWechatPath, dbPath),
+    startGetKey: (customWechatPath?: string, dbPath?: string, options?: { allowRestart?: boolean; forceRestart?: boolean }) =>
+      ipcRenderer.invoke('wxkey:startGetKey', customWechatPath, dbPath, options),
     cancel: () => ipcRenderer.invoke('wxkey:cancel'),
     detectCurrentAccount: (dbPath?: string, maxTimeDiffMinutes?: number) => ipcRenderer.invoke('wxkey:detectCurrentAccount', dbPath, maxTimeDiffMinutes),
     onStatus: (callback: (data: { status: string; level: number }) => void) => {
@@ -827,6 +846,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 朋友圈
   sns: {
+    getCover: () => ipcRenderer.invoke('sns:getCover'),
     getTimeline: (limit?: number, offset?: number, usernames?: string[], keyword?: string, startTime?: number, endTime?: number) =>
       ipcRenderer.invoke('sns:getTimeline', limit || 20, offset || 0, usernames, keyword, startTime, endTime),
     proxyImage: (params: { url: string; key?: string | number }) =>
@@ -967,6 +987,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     createPaymentOrder: (input: RelayOneCreatePaymentOrderInput) => ipcRenderer.invoke('relayOne:createPaymentOrder', input) as Promise<RelayOneIpcResult<RelayOnePaymentOrder>>,
     getPaymentOrder: (orderId: string) => ipcRenderer.invoke('relayOne:getPaymentOrder', orderId) as Promise<RelayOneIpcResult<RelayOnePaymentOrder>>,
     cancelPaymentOrder: (orderId: string) => ipcRenderer.invoke('relayOne:cancelPaymentOrder', orderId) as Promise<RelayOneIpcResult<RelayOnePaymentOrder>>,
+    openPaymentWindow: (url: string) => ipcRenderer.invoke('relayOne:openPaymentWindow', url) as Promise<RelayOneIpcResult<void>>,
+    closePaymentWindow: () => ipcRenderer.invoke('relayOne:closePaymentWindow') as Promise<RelayOneIpcResult<void>>,
     onStatusChanged: (callback: (status: RelayOneStatus) => void): (() => void) => {
       const listener = (_event: unknown, status: RelayOneStatus) => callback(status)
       ipcRenderer.on('relayOne:statusChanged', listener)

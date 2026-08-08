@@ -11,6 +11,8 @@ interface ExportResultModalProps {
 }
 
 export default function ExportResultModal({ result, unitLabel, onOpenFolder, onClose }: ExportResultModalProps) {
+  const hasSuccess = (result.successCount ?? 0) > 0
+
   return (
     <Modal isOpen onOpenChange={(open) => { if (!open) onClose() }}>
       <Modal.Backdrop>
@@ -18,25 +20,24 @@ export default function ExportResultModal({ result, unitLabel, onOpenFolder, onC
           <Modal.Dialog>
             <Modal.CloseTrigger />
             <Modal.Header>
-              <Modal.Icon className={result.success ? 'bg-success-soft text-success-soft-foreground' : 'bg-danger-soft text-danger-soft-foreground'}>
-                {result.success ? <CircleCheck className="size-5" /> : <CircleXmark className="size-5" />}
+              <Modal.Icon className={hasSuccess ? 'bg-success-soft text-success-soft-foreground' : 'bg-danger-soft text-danger-soft-foreground'}>
+                {hasSuccess ? <CircleCheck className="size-5" /> : <CircleXmark className="size-5" />}
               </Modal.Icon>
-              <Modal.Heading>{result.success ? '导出完成' : '导出失败'}</Modal.Heading>
+              <Modal.Heading>{hasSuccess ? '导出完成' : '导出失败'}</Modal.Heading>
             </Modal.Header>
             <Modal.Body>
-              {result.success ? (
+              {result.successCount !== undefined && (
                 <Typography type="body-sm" className="text-muted">
-                  {result.successCount !== undefined
-                    ? `成功导出 ${result.successCount} ${unitLabel}`
-                    : '导出成功'}
+                  成功导出 {result.successCount} {unitLabel}
                   {result.failCount ? `，${result.failCount} 个失败` : ''}
                 </Typography>
-              ) : (
-                <Typography type="body-sm" className="text-danger">{result.error}</Typography>
+              )}
+              {result.error && (
+                <Typography type="body-sm" className="text-danger mt-2">{result.error}</Typography>
               )}
             </Modal.Body>
             <Modal.Footer>
-              {result.success && (
+              {hasSuccess && (
                 <Button variant="tertiary" onPress={onOpenFolder}>
                   <ArrowUpRightFromSquare width={16} height={16} />
                   打开文件夹

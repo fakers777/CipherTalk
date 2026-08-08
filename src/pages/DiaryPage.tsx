@@ -64,8 +64,6 @@ const DIARY_SUMMARIZING_LINES = [
   '别催，日记不是赶出来的',
 ]
 
-const EXISTING_TODAY_DIARY_NOTICE = '今天的日记已经躺在那儿了。再写一篇，前一篇就会被盖掉。 我不想让它还没被好好看过，就消失了。'
-
 const DIARY_FONT_OPTIONS: Array<{ id: DiaryFontMode; label: string }> = [
   { id: 'hand', label: '手写' },
   { id: 'song', label: '宋体' },
@@ -398,13 +396,8 @@ export default function DiaryPage() {
     try {
       const res = await window.electronAPI.memory.summarizeTodayDiary()
       if (!res.success || !res.diary) throw new Error(res.error || '总结日记失败')
-      if (res.alreadyExists) {
-        setNotice(EXISTING_TODAY_DIARY_NOTICE)
-        await showDiary(res.diary)
-      } else {
-        await showDiary(res.diary)
-        await loadDiaries(res.diary.date)
-      }
+      await showDiary(res.diary)
+      await loadDiaries(res.diary.date)
     } catch (err) {
       setError(err instanceof Error ? err.message : '总结日记失败')
       setReaderOpen(false)
@@ -684,7 +677,7 @@ export default function DiaryPage() {
                         </TimeField.Input>
                       </TimeField.Group>
                       <Description className="flex items-center gap-1.5">
-                        每天 {String(settingsDraft.summaryHour).padStart(2, '0')}:00 后整理当天内容。
+                        每天 {String(settingsDraft.summaryHour).padStart(2, '0')}:00 整理此前 24 小时的内容（覆盖前一天 {String(settingsDraft.summaryHour).padStart(2, '0')}:00 起）。
                       </Description>
                     </TimeField>
 

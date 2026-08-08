@@ -32,7 +32,8 @@
   top: 32px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 100;
+  /* 只需浮在 .settings-body 之上；HeroUI 弹窗遮罩是 z-50，高于它会把设置页里所有弹窗压在下面 */
+  z-index: 10;
   width: min(100% - 32px, 1160px);
 }
 

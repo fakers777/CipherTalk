@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { CircleDashed, Play, Video } from '@gravity-ui/icons'
+import { CircleDashed, PlayFill, Video } from '@gravity-ui/icons'
 import type { ChatSession, Message } from '../../../../types/models'
 import { lastIncrementalUpdateTime, videoInfoCache } from './mediaState'
 import type { CachedVideoInfo } from './mediaState'
+import { buildVideoCacheKey } from './videoCacheKey'
 
 interface VideoBubbleProps {
   message: Message
@@ -21,7 +22,23 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
   const [isVisible, setIsVisible] = useState(false)
   const videoContainerRef = useRef<HTMLDivElement>(null)
 
-  const videoCacheKey = message.videoMd5 || `local:${message.localId}`
+  const videoCacheKey = buildVideoCacheKey({
+    sessionId: session.username,
+    localId: message.localId,
+    serverId: message.serverId,
+    createTime: message.createTime,
+    sortSeq: message.sortSeq,
+    videoMd5: message.videoMd5
+  })
+
+  // 跟踪当前 videoInfo 对应的 videoCacheKey
+  // 当组件被虚拟滚动复用时，videoCacheKey 变化但 videoInfo 仍为旧值
+  const loadedCacheKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    loadedCacheKeyRef.current = null
+    setVideoInfo(null)
+  }, [videoCacheKey])
 
   // 视频懒加载
   useEffect(() => {
@@ -50,8 +67,11 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
 
   // 加载视频信息
   useEffect(() => {
-    if (!isVisible || videoInfo || videoLoading) return
+    if (!isVisible || videoLoading) return
     if (!message.videoMd5 && !message.rawContent) return
+
+    // 如果 videoInfo 对应当前 videoCacheKey，不需要重新加载
+    if (videoInfo && loadedCacheKeyRef.current === videoCacheKey) return
 
     const cached = videoInfoCache.get(videoCacheKey)
     if (cached) {
@@ -66,6 +86,7 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
         diagnostics: cached.diagnostics
       })
       if (!shouldRefetch) {
+        loadedCacheKeyRef.current = videoCacheKey
         setVideoInfo(cached)
         return
       }
@@ -81,7 +102,9 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
       rawPreview: String(message.rawContent || '').replace(/\s+/g, ' ').slice(0, 220)
     })
 
+    let cancelled = false
     window.electronAPI.video.getVideoInfo(message.videoMd5 || '', message.rawContent).then((result) => {
+      if (cancelled) return
       if (result && result.success) {
         const info: CachedVideoInfo = {
           exists: result.exists,
@@ -92,6 +115,7 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
           cachedAt: Date.now()
         }
         videoInfoCache.set(videoCacheKey, info)
+        loadedCacheKeyRef.current = videoCacheKey
         setVideoInfo(info)
         console.log('[Video][Renderer] request-success', {
           localId: message.localId,
@@ -110,6 +134,7 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
       } else {
         const info: CachedVideoInfo = { exists: false, cachedAt: Date.now() }
         videoInfoCache.set(videoCacheKey, info)
+        loadedCacheKeyRef.current = videoCacheKey
         setVideoInfo(info)
         console.warn('[Video][Renderer] request-unsuccessful', {
           localId: message.localId,
@@ -119,8 +144,10 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
         })
       }
     }).catch((error) => {
+      if (cancelled) return
       const info: CachedVideoInfo = { exists: false, cachedAt: Date.now() }
       videoInfoCache.set(videoCacheKey, info)
+      loadedCacheKeyRef.current = videoCacheKey
       setVideoInfo(info)
       console.error('[Video][Renderer] request-error', {
         localId: message.localId,
@@ -131,7 +158,9 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
     }).finally(() => {
       setVideoLoading(false)
     })
-  }, [isVisible, videoInfo, videoLoading, message.videoMd5, message.rawContent, message.localId, videoCacheKey, session.username])
+
+    return () => { cancelled = true }
+  }, [isVisible, videoInfo, message.videoMd5, message.rawContent, message.localId, videoCacheKey, session.username])
 
   // 播放视频 - 打开独立窗口
   const handlePlayVideo = useCallback(async () => {
@@ -176,6 +205,7 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
             diagnostics: videoInfo?.diagnostics
           })
           videoInfoCache.delete(videoCacheKey)
+          loadedCacheKeyRef.current = null
           setVideoInfo(null)
           setVideoLoading(false)
         }}
@@ -204,7 +234,7 @@ function VideoBubble({ message, session, onContextMenu }: VideoBubbleProps) {
         </div>
       )}
       <div className="video-play-button">
-        <Play width={36} height={36} fill="currentColor" />
+        <PlayFill width={24} height={24} />
       </div>
       {message.videoDuration && message.videoDuration > 0 && (
         <span className="video-duration-tag">

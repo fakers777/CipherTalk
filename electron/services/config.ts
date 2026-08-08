@@ -157,8 +157,8 @@ interface ConfigSchema {
   // providers 持久化各服务商独立配置，切换服务商不会互相覆盖。
   ttsConfig: {
     enabled: boolean
-    activeProvider: 'xiaomi' | 'volcengine' | 'aliyun-qwen'
-    protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+    activeProvider: 'xiaomi' | 'volcengine' | 'aliyun-qwen' | 'stepfun'
+    protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
     apiKey: string
     realtimeAppId?: string
     realtimeAccessKey?: string
@@ -169,7 +169,7 @@ interface ConfigSchema {
     speed: number
     providers: {
       xiaomi: {
-        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
         apiKey: string
         realtimeAppId?: string
         realtimeAccessKey?: string
@@ -180,7 +180,7 @@ interface ConfigSchema {
         speed: number
       }
       volcengine: {
-        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
         apiKey: string
         realtimeAppId?: string
         realtimeAccessKey?: string
@@ -191,7 +191,18 @@ interface ConfigSchema {
         speed: number
       }
       'aliyun-qwen': {
-        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime'
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
+        apiKey: string
+        realtimeAppId?: string
+        realtimeAccessKey?: string
+        baseURL: string
+        model: string
+        voice: string
+        instructions: string
+        speed: number
+      }
+      stepfun: {
+        protocol: 'xiaomi-mimo-tts' | 'volcengine-bidirectional' | 'aliyun-qwen-realtime' | 'stepfun-speech'
         apiKey: string
         realtimeAppId?: string
         realtimeAccessKey?: string
@@ -409,6 +420,15 @@ const defaults: ConfigSchema = {
         baseURL: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',
         model: 'qwen3-tts-instruct-flash-realtime',
         voice: 'Cherry',
+        instructions: '',
+        speed: 1,
+      },
+      stepfun: {
+        protocol: 'stepfun-speech',
+        apiKey: '',
+        baseURL: 'https://api.stepfun.com/v1',
+        model: 'stepaudio-2.5-tts',
+        voice: 'linjiajiejie',
         instructions: '',
         speed: 1,
       },

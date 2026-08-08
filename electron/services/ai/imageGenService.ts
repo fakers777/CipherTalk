@@ -116,6 +116,30 @@ function normalizeSize(size?: string): `${number}x${number}` | undefined {
   return /^\d+x\d+$/.test(value) ? (value as `${number}x${number}`) : undefined
 }
 
+/**
+ * 厂商拒绝尺寸时从报错里挑一个它支持的尺寸重试。
+ * 各家白名单不同且会变，不内置尺寸表，直接用报错里列出的那批；
+ * 有原尺寸就选宽高比最接近的，没有就选最方的。
+ */
+function pickSupportedSize(error: string | undefined, requested?: string): string {
+  const message = String(error || '')
+  if (!/size|尺寸|resolution|dimension/i.test(message)) return ''
+
+  const candidates = (message.match(/\b\d{2,5}x\d{2,5}\b/gi) || [])
+    .map((item) => item.toLowerCase())
+    .filter((item, index, list) => list.indexOf(item) === index && item !== String(requested || '').trim().toLowerCase())
+  // 报错只说 size 必填、没给白名单时，用几乎所有厂商都支持的方图兜底
+  if (candidates.length === 0) return /required|必填|missing|不能为空/i.test(message) ? '1024x1024' : ''
+
+  const ratioOf = (size: string) => {
+    const [w, h] = size.split('x').map(Number)
+    return w > 0 && h > 0 ? w / h : 1
+  }
+  const target = /^\d+x\d+$/.test(String(requested || '').trim()) ? ratioOf(String(requested).trim()) : 1
+  return candidates.reduce((best, item) =>
+    Math.abs(ratioOf(item) - target) < Math.abs(ratioOf(best) - target) ? item : best)
+}
+
 /** openai / google 协议：AI SDK generateImage。 */
 async function generateViaAiSdk(prompt: string, cfg: ImageGenConfig, size?: string, signal?: AbortSignal): Promise<ImageGenResult> {
   const fetch = createProxyFetch(getResolvedProxyUrl())
@@ -216,22 +240,40 @@ export async function generateImageToFile(
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   options.signal?.addEventListener('abort', () => controller.abort())
 
+  const attempt = async (size?: string): Promise<ImageGenResult> => {
+    try {
+      if (cfg.protocol === 'openai-compatible' || cfg.protocol === 'custom') {
+        return await generateViaCompatible(input, cfg, size, controller.signal)
+      }
+      return await generateViaAiSdk(input, cfg, size, controller.signal)
+    } catch (e) {
+      if (controller.signal.aborted && !options.signal?.aborted) {
+        return { success: false, error: `作图请求超时（>${Math.round(timeoutMs / 1000)}秒），请稍后重试` }
+      }
+      const err = e as { responseBody?: string; message?: string }
+      return { success: false, error: [err?.message, err?.responseBody].filter(Boolean).join(' · ') || String(e) }
+    }
+  }
+
   try {
-    if (cfg.protocol === 'openai-compatible' || cfg.protocol === 'custom') {
-      return await generateViaCompatible(input, cfg, options.size, controller.signal)
-    }
-    return await generateViaAiSdk(input, cfg, options.size, controller.signal)
-  } catch (e) {
-    if (controller.signal.aborted && !options.signal?.aborted) {
-      return { success: false, error: `作图请求超时（>${Math.round(timeoutMs / 1000)}秒），请稍后重试` }
-    }
-    return { success: false, error: e instanceof Error ? e.message : String(e) }
+    const requested = options.size || cfg.size
+    const result = await attempt(options.size)
+    if (result.success || controller.signal.aborted) return result
+
+    const fallbackSize = pickSupportedSize(result.error, requested)
+    if (!fallbackSize) return result
+    console.warn(`[ImageGen] 尺寸 ${requested || '(未指定)'} 被拒，改用报错里支持的 ${fallbackSize} 重试`)
+    const retried = await attempt(fallbackSize)
+    return retried.success ? retried : result
   } finally {
     clearTimeout(timeout)
   }
 }
 
-/** 测试配置：真实生成一张小图验证全链路（会消耗少量额度）。 */
+/**
+ * 测试配置：真实生成一张图验证全链路（会消耗少量额度）。
+ * 不指定 size，用配置里的图片尺寸；很多厂商只接受白名单尺寸，写死小图会被拒。
+ */
 export async function testImageGenConfig(cfg: Partial<ImageGenConfig>): Promise<ImageGenResult> {
-  return generateImageToFile('一只可爱的橘猫，扁平插画风格', { size: '512x512', config: cfg })
+  return generateImageToFile('一只可爱的橘猫，扁平插画风格', { config: cfg })
 }

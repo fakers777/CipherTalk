@@ -1,6 +1,6 @@
 /**
  * 文字转语音设置 —— 朗读 AI 回复、微信消息、克隆好友语音回复共用。
- * 小米MiMo、火山引擎/豆包、通义千问/百炼的服务商配置分别保存。
+ * 小米MiMo、火山引擎/豆包、通义千问/百炼、阶跃星辰的服务商配置分别保存。
  * 自带 IPC（tts:getConfig/setConfig/test），未配置时各处朗读回退系统语音。
  */
 import { useEffect, useRef, useState } from 'react'
@@ -42,6 +42,15 @@ import {
   getDefaultXiaomiMimoVoice,
   isXiaomiMimoVoiceCloneSample,
 } from '@/lib/xiaomiMimoTtsCatalog'
+import {
+  STEPFUN_DEFAULT_TTS,
+  STEPFUN_TTS_DOC_URL,
+  STEPFUN_TTS_MODELS,
+  STEPFUN_TTS_STEP_PLAN_BASE_URL,
+  STEPFUN_TTS_VOICES,
+  findStepfunTtsModel,
+  findStepfunTtsVoice,
+} from '@/lib/stepfunTtsCatalog'
 
 const DEFAULT_XIAOMI_CFG: TtsProviderConfig = {
   protocol: 'xiaomi-mimo-tts',
@@ -75,6 +84,16 @@ const DEFAULT_ALIYUN_QWEN_CFG: TtsProviderConfig = {
   speed: 1,
 }
 
+const DEFAULT_STEPFUN_CFG: TtsProviderConfig = {
+  protocol: 'stepfun-speech',
+  apiKey: '',
+  baseURL: STEPFUN_DEFAULT_TTS.baseURL,
+  model: STEPFUN_DEFAULT_TTS.model,
+  voice: STEPFUN_DEFAULT_TTS.voice,
+  instructions: '',
+  speed: 1,
+}
+
 const DEFAULT_CFG: TtsConfig = {
   enabled: false,
   activeProvider: 'xiaomi',
@@ -83,6 +102,7 @@ const DEFAULT_CFG: TtsConfig = {
     xiaomi: { ...DEFAULT_XIAOMI_CFG },
     volcengine: { ...DEFAULT_VOLCENGINE_CFG },
     'aliyun-qwen': { ...DEFAULT_ALIYUN_QWEN_CFG },
+    stepfun: { ...DEFAULT_STEPFUN_CFG },
   },
 }
 
@@ -90,6 +110,7 @@ const PROVIDER_OPTIONS: Array<{ value: TtsProviderId; label: string; hint: strin
   { value: 'xiaomi', label: '小米MiMo', hint: '小米MiMo 语音合成：api-key + /chat/completions + audio 参数，内置模型与预置音色' },
   { value: 'volcengine', label: '火山引擎 / 豆包', hint: '支持声音复刻、流式 TTS 与端到端 Realtime 通话；三项产品使用各自对应的控制台凭据' },
   { value: 'aliyun-qwen', label: '通义千问 / 百炼', hint: '使用百炼 Qwen-TTS Realtime WebSocket：Bearer API Key + response.audio.delta PCM 分片' },
+  { value: 'stepfun', label: '阶跃星辰', hint: '阶跃星辰 /audio/speech：Bearer API Key，直接返回音频；stepaudio-2.5-tts 支持 instruction 语气控制' },
 ]
 
 const VOLCENGINE_CLONE_SPEAKER_HINT_ID = '__volcengine_clone_speaker_hint__'
@@ -170,14 +191,33 @@ function normalizeAliyunQwenTtsConfig(config: TtsProviderConfig): TtsProviderCon
   return { ...config, baseURL, model, voice }
 }
 
+/** 音色框显示中文名称、落库仍是 ID：按名称反查，查不到（自有复刻音色）就原样保存。 */
+function toVoiceId(options: ReadonlyArray<{ id: string; label: string }>, value: string): string {
+  return options.find((option) => option.label === value.trim())?.id || value
+}
+
+function normalizeStepfunTtsConfig(config: TtsProviderConfig): TtsProviderConfig {
+  if (config.protocol !== 'stepfun-speech') return config
+
+  const baseURL = config.baseURL.trim() || STEPFUN_DEFAULT_TTS.baseURL
+  const model = config.model.trim() || STEPFUN_DEFAULT_TTS.model
+  const voice = config.voice.trim() || STEPFUN_DEFAULT_TTS.voice
+
+  if (baseURL === config.baseURL && model === config.model && voice === config.voice) return config
+  return { ...config, baseURL, model, voice }
+}
+
 function getProviderIdForProtocol(protocol: unknown): TtsProviderId {
   if (protocol === 'volcengine-bidirectional') return 'volcengine'
   if (protocol === 'aliyun-qwen-realtime') return 'aliyun-qwen'
+  if (protocol === 'stepfun-speech') return 'stepfun'
   return 'xiaomi'
 }
 
 function normalizeProviderId(provider: unknown, fallback: TtsProviderId = 'xiaomi'): TtsProviderId {
-  return provider === 'xiaomi' || provider === 'volcengine' || provider === 'aliyun-qwen' ? provider : fallback
+  return provider === 'xiaomi' || provider === 'volcengine' || provider === 'aliyun-qwen' || provider === 'stepfun'
+    ? provider
+    : fallback
 }
 
 function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsProviderConfig> = {}): TtsProviderConfig {
@@ -185,7 +225,9 @@ function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsPro
     ? DEFAULT_VOLCENGINE_CFG
     : provider === 'aliyun-qwen'
       ? DEFAULT_ALIYUN_QWEN_CFG
-      : DEFAULT_XIAOMI_CFG
+      : provider === 'stepfun'
+        ? DEFAULT_STEPFUN_CFG
+        : DEFAULT_XIAOMI_CFG
   const merged: TtsProviderConfig = {
     ...defaults,
     ...config,
@@ -201,6 +243,7 @@ function normalizeProviderConfig(provider: TtsProviderId, config: Partial<TtsPro
   }
   if (provider === 'volcengine') return normalizeVolcengineTtsConfig(merged)
   if (provider === 'aliyun-qwen') return normalizeAliyunQwenTtsConfig(merged)
+  if (provider === 'stepfun') return normalizeStepfunTtsConfig(merged)
   return normalizeXiaomiMimoTtsConfig(merged)
 }
 
@@ -211,6 +254,7 @@ function normalizeTtsConfig(config: Partial<TtsConfig> = {}): TtsConfig {
     xiaomi: normalizeProviderConfig('xiaomi', rawProviders.xiaomi),
     volcengine: normalizeProviderConfig('volcengine', rawProviders.volcengine),
     'aliyun-qwen': normalizeProviderConfig('aliyun-qwen', rawProviders['aliyun-qwen']),
+    stepfun: normalizeProviderConfig('stepfun', rawProviders.stepfun),
   }
 
   if (config.protocol || config.apiKey != null || config.realtimeAppId != null || config.realtimeAccessKey != null || config.baseURL != null || config.model != null || config.voice != null || config.instructions != null || config.speed != null) {
@@ -383,6 +427,10 @@ export default function TtsTab() {
     void window.electronAPI.shell.openExternal(ALIYUN_QWEN_TTS_VOICE_CLONE_DOC_URL)
   }
 
+  const openStepfunDocs = () => {
+    void window.electronAPI.shell.openExternal(STEPFUN_TTS_DOC_URL)
+  }
+
   if (!loaded) return null
 
   const activeProvider = cfg.activeProvider || 'xiaomi'
@@ -390,6 +438,7 @@ export default function TtsTab() {
   const isVolcengine = activeProvider === 'volcengine'
   const isXiaomiMimo = activeProvider === 'xiaomi'
   const isAliyunQwen = activeProvider === 'aliyun-qwen'
+  const isStepfun = activeProvider === 'stepfun'
   const volcengineEndpointOption = findVolcengineEndpoint(cfg.baseURL)
   const volcengineResourceOption = findVolcengineResource(cfg.model)
   const volcengineVoiceOption = findVolcengineVoice(cfg.voice)
@@ -398,9 +447,10 @@ export default function TtsTab() {
     const resourceId = cfg.model.trim()
     return !findVolcengineResource(resourceId) || option.resourceIds.includes(resourceId)
   })
+  const volcengineDefaultSpeaker = getDefaultVolcengineSpeaker(cfg.model) || VOLCENGINE_DEFAULT_TTS.speaker
   const volcengineSpeakerPlaceholder = volcengineResourceOption?.family === 'icl'
     ? 'S_xxx 或 icl_xxx'
-    : getDefaultVolcengineSpeaker(cfg.model) || VOLCENGINE_DEFAULT_TTS.speaker
+    : findVolcengineVoice(volcengineDefaultSpeaker)?.label || volcengineDefaultSpeaker
   const xiaomiMimoModelOption = findXiaomiMimoTtsModel(cfg.model)
   const xiaomiMimoVoiceOption = findXiaomiMimoTtsVoice(cfg.voice)
   const xiaomiMimoNeedsVoice = isXiaomiMimo && xiaomiMimoModelOption?.requiresVoice !== false
@@ -411,8 +461,11 @@ export default function TtsTab() {
   const aliyunQwenVoiceOption = findAliyunQwenTtsVoice(cfg.voice)
   const aliyunQwenNeedsVoice = isAliyunQwen && aliyunQwenModelOption?.requiresVoice !== false
   const aliyunQwenVoiceReady = !aliyunQwenNeedsVoice || Boolean(cfg.voice.trim())
+  const stepfunModelOption = findStepfunTtsModel(cfg.model)
+  const stepfunVoiceOption = findStepfunTtsVoice(cfg.voice)
   const canTest = Boolean(cfg.apiKey && cfg.model) &&
     (!isVolcengine || Boolean(cfg.voice)) &&
+    (!isStepfun || Boolean(cfg.voice.trim())) &&
     (!xiaomiMimoNeedsVoice || xiaomiMimoVoiceReady) &&
     aliyunQwenVoiceReady
 
@@ -423,7 +476,7 @@ export default function TtsTab() {
           <Card.Title>文字转语音（TTS）</Card.Title>
           <Card.Description>
             启用后，AI 助手回复、微信消息右键「朗读」和克隆好友的语音回复都会用这里的音色合成语音；
-            未启用时回退系统朗读。支持小米MiMo、火山引擎 / 豆包和通义千问 / 百炼，各服务商配置会分别保存。
+            未启用时回退系统朗读。支持小米MiMo、火山引擎 / 豆包、通义千问 / 百炼和阶跃星辰，各服务商配置会分别保存。
           </Card.Description>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -475,6 +528,18 @@ export default function TtsTab() {
               </Button>
             </>
           )}
+          {isStepfun && (
+            <Button
+              aria-label="打开阶跃星辰语音接入文档"
+              onPress={openStepfunDocs}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <ArrowUpRightFromSquare width={16} height={16} />
+              官方文档
+            </Button>
+          )}
           <Switch
             aria-label={cfg.enabled ? '关闭文字转语音' : '启用文字转语音'}
             isSelected={cfg.enabled}
@@ -521,7 +586,7 @@ export default function TtsTab() {
           <Label>{isVolcengine ? 'TTS / 声音复刻 API Key' : 'API Key'}</Label>
           <InputGroup fullWidth variant="secondary">
             <InputGroup.Input
-              placeholder={isVolcengine ? '火山引擎新版控制台 X-Api-Key' : isAliyunQwen ? 'DASHSCOPE_API_KEY' : 'MIMO_API_KEY'}
+              placeholder={isVolcengine ? '火山引擎新版控制台 X-Api-Key' : isAliyunQwen ? 'DASHSCOPE_API_KEY' : isStepfun ? 'STEP_API_KEY' : 'MIMO_API_KEY'}
               type="password"
             />
           </InputGroup>
@@ -530,7 +595,9 @@ export default function TtsTab() {
               ? '用于流式 TTS 与声音复刻的 X-Api-Key，仅保存在本地；端到端通话使用下方独立凭据。'
               : isAliyunQwen
                 ? '从阿里云百炼 / DashScope 获取 API Key，请求时使用 Authorization: Bearer，仅保存在本地。'
-                : '从小米MiMo控制台获取 API Key，请求时会使用 api-key 请求头，仅保存在本地。'}
+                : isStepfun
+                  ? '从阶跃星辰开放平台获取 API Key，请求时使用 Authorization: Bearer，仅保存在本地。'
+                  : '从小米MiMo控制台获取 API Key，请求时会使用 api-key 请求头，仅保存在本地。'}
           </Description>
         </TextField>
 
@@ -596,6 +663,16 @@ export default function TtsTab() {
             </InputGroup>
             <Description>
               北京地域默认使用 dashscope.aliyuncs.com；系统会自动追加 model 查询参数。新加坡地域可填写 workspace 专属 maas 地址。
+            </Description>
+          </TextField>
+        ) : isStepfun ? (
+          <TextField fullWidth onChange={(v) => patch({ baseURL: v })} value={cfg.baseURL}>
+            <Label>接口地址</Label>
+            <InputGroup fullWidth variant="secondary">
+              <InputGroup.Input placeholder={STEPFUN_DEFAULT_TTS.baseURL} />
+            </InputGroup>
+            <Description>
+              填写 /v1 地址，系统会自动拼接 /audio/speech。Step Plan 套餐请改填 {STEPFUN_TTS_STEP_PLAN_BASE_URL}。
             </Description>
           </TextField>
         ) : (
@@ -689,6 +766,41 @@ export default function TtsTab() {
               {aliyunQwenModelOption?.hint || '通义千问实时语音合成模型 ID。'}
             </Description>
           </ComboBox>
+        ) : isStepfun ? (
+          <ComboBox
+            allowsCustomValue
+            fullWidth
+            inputValue={cfg.model}
+            selectedKey={stepfunModelOption?.id || null}
+            onInputChange={(value) => patch({ model: value })}
+            onSelectionChange={(key) => {
+              if (key != null) patch({ model: String(key) })
+            }}
+            menuTrigger="focus"
+            variant="secondary"
+          >
+            <Label>模型</Label>
+            <ComboBox.InputGroup>
+              <Input placeholder={STEPFUN_DEFAULT_TTS.model} variant="secondary" />
+              <ComboBox.Trigger />
+            </ComboBox.InputGroup>
+            <ComboBox.Popover>
+              <ListBox>
+                {STEPFUN_TTS_MODELS.map((option) => (
+                  <ListBox.Item key={option.id} id={option.id} textValue={`${option.label} ${option.id} ${option.hint}`} className="shrink-0">
+                    <div className="min-w-0">
+                      <div>{option.label}</div>
+                      <div className="text-xs text-muted-foreground break-all">{option.id}</div>
+                    </div>
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </ComboBox.Popover>
+            <Description>
+              {stepfunModelOption?.hint || '阶跃星辰语音合成模型 ID。'}
+            </Description>
+          </ComboBox>
         ) : (
           <ComboBox
             allowsCustomValue
@@ -733,9 +845,9 @@ export default function TtsTab() {
           <ComboBox
             allowsCustomValue
             fullWidth
-            inputValue={cfg.voice}
+            inputValue={volcengineVoiceOption?.label || cfg.voice}
             selectedKey={volcengineVoiceOptions.some((option) => option.id === cfg.voice.trim()) ? cfg.voice.trim() : null}
-            onInputChange={(value) => patch({ voice: value })}
+            onInputChange={(value) => patch({ voice: toVoiceId(VOLCENGINE_TTS_VOICES, value) })}
             onSelectionChange={(key) => {
               if (key != null && String(key) !== VOLCENGINE_CLONE_SPEAKER_HINT_ID) patch({ voice: String(key) })
             }}
@@ -791,9 +903,9 @@ export default function TtsTab() {
             <ComboBox
               allowsCustomValue
               fullWidth
-              inputValue={cfg.voice}
+              inputValue={aliyunQwenVoiceOption?.label || cfg.voice}
               selectedKey={aliyunQwenVoiceOption?.id || null}
-              onInputChange={(value) => patch({ voice: value })}
+              onInputChange={(value) => patch({ voice: toVoiceId(ALIYUN_QWEN_TTS_VOICES, value) })}
               onSelectionChange={(key) => {
                 if (key != null) patch({ voice: String(key) })
               }}
@@ -802,7 +914,7 @@ export default function TtsTab() {
             >
               <Label>音色</Label>
               <ComboBox.InputGroup>
-                <Input placeholder={ALIYUN_QWEN_DEFAULT_TTS.voice} variant="secondary" />
+                <Input placeholder={findAliyunQwenTtsVoice(ALIYUN_QWEN_DEFAULT_TTS.voice)?.label || ALIYUN_QWEN_DEFAULT_TTS.voice} variant="secondary" />
                 <ComboBox.Trigger />
               </ComboBox.InputGroup>
               <ComboBox.Popover>
@@ -825,13 +937,13 @@ export default function TtsTab() {
               </Description>
             </ComboBox>
           )
-        ) : xiaomiMimoModelOption?.kind === 'preset' ? (
+        ) : isStepfun ? (
           <ComboBox
             allowsCustomValue
             fullWidth
-            inputValue={cfg.voice}
-            selectedKey={xiaomiMimoVoiceOption?.id || null}
-            onInputChange={(value) => patch({ voice: value })}
+            inputValue={stepfunVoiceOption?.label || cfg.voice}
+            selectedKey={stepfunVoiceOption?.id || null}
+            onInputChange={(value) => patch({ voice: toVoiceId(STEPFUN_TTS_VOICES, value) })}
             onSelectionChange={(key) => {
               if (key != null) patch({ voice: String(key) })
             }}
@@ -840,7 +952,44 @@ export default function TtsTab() {
           >
             <Label>音色</Label>
             <ComboBox.InputGroup>
-              <Input placeholder={XIAOMI_MIMO_DEFAULT_TTS.voice} variant="secondary" />
+              <Input placeholder={findStepfunTtsVoice(STEPFUN_DEFAULT_TTS.voice)?.label || STEPFUN_DEFAULT_TTS.voice} variant="secondary" />
+              <ComboBox.Trigger />
+            </ComboBox.InputGroup>
+            <ComboBox.Popover>
+              <ListBox>
+                {STEPFUN_TTS_VOICES.map((option) => (
+                  <ListBox.Item key={option.id} id={option.id} textValue={`${option.label} ${option.id} ${option.language} ${option.gender}`} className="shrink-0">
+                    <div className="min-w-0">
+                      <div>{option.label}</div>
+                      <div className="text-xs text-muted-foreground break-all">{option.id}</div>
+                    </div>
+                    <ListBox.ItemIndicator />
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </ComboBox.Popover>
+            <Description>
+              {stepfunVoiceOption
+                ? `${stepfunVoiceOption.language} · ${stepfunVoiceOption.gender} · ${stepfunVoiceOption.hint}`
+                : '阶跃星辰预置音色 ID；音色复刻得到的自有 voice 也可直接填写。'}
+            </Description>
+          </ComboBox>
+        ) : xiaomiMimoModelOption?.kind === 'preset' ? (
+          <ComboBox
+            allowsCustomValue
+            fullWidth
+            inputValue={xiaomiMimoVoiceOption?.label || cfg.voice}
+            selectedKey={xiaomiMimoVoiceOption?.id || null}
+            onInputChange={(value) => patch({ voice: toVoiceId(XIAOMI_MIMO_TTS_VOICES, value) })}
+            onSelectionChange={(key) => {
+              if (key != null) patch({ voice: String(key) })
+            }}
+            menuTrigger="focus"
+            variant="secondary"
+          >
+            <Label>音色</Label>
+            <ComboBox.InputGroup>
+              <Input placeholder={findXiaomiMimoTtsVoice(XIAOMI_MIMO_DEFAULT_TTS.voice)?.label || XIAOMI_MIMO_DEFAULT_TTS.voice} variant="secondary" />
               <ComboBox.Trigger />
             </ComboBox.InputGroup>
             <ComboBox.Popover>
@@ -893,7 +1042,11 @@ export default function TtsTab() {
                 ? (aliyunQwenModelOption?.supportsInstructions
                   ? '仅 qwen3-tts-instruct-* 模型会发送 instructions/optimize_instructions；复刻模型和基础模型不会发送风格指令。'
                   : '当前通义模型不发送风格指令；如需语气控制请切换到 qwen3-tts-instruct-flash-realtime。')
-                : '支持该能力的语音模型会按这里的自然语言控制朗读；克隆好友语音会优先使用画像自动生成的指令。'}
+                : isStepfun
+                  ? (stepfunModelOption?.supportsInstruction === false
+                    ? '当前阶跃模型不发送 instruction；如需语气控制请切换到 stepaudio-2.5-tts。'
+                    : '作为 instruction 发送给 stepaudio-2.5-tts，上限 200 字，超出会截断。')
+                  : '支持该能力的语音模型会按这里的自然语言控制朗读；克隆好友语音会优先使用画像自动生成的指令。'}
           </Description>
         </TextField>
 
@@ -914,7 +1067,9 @@ export default function TtsTab() {
               ? '1 = 正常语速；火山引擎会映射为 speech_rate，范围 0.5–2。'
               : isAliyunQwen
                 ? '1 = 正常语速；通义实时模型不发送独立 speech_rate，会在 instruct 模型中转成自然语言风格提示。'
-                : '1 = 正常语速；小米会转成自然语言风格提示，不发送独立 speed 参数。'}
+                : isStepfun
+                  ? '1 = 正常语速；阶跃星辰按 speed 参数原样发送，范围 0.5–2。'
+                  : '1 = 正常语速；小米会转成自然语言风格提示，不发送独立 speed 参数。'}
           </Description>
         </TextField>
 

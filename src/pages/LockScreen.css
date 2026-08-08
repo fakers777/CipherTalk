@@ -67,7 +67,7 @@
   right: -4px;
   width: 32px;
   height: 32px;
-  background: var(--primary-color);
+  background: var(--primary);
   color: white;
   border-radius: 50%;
   display: flex;
@@ -99,7 +99,7 @@
   align-items: center;
   gap: 12px;
   padding: 12px 32px;
-  background: var(--primary-color);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 12px;
@@ -147,7 +147,7 @@
 }
 
 .password-input-wrapper:focus-within {
-  border-color: var(--primary-color);
+  border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
 }
 
@@ -173,7 +173,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--primary-color);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 8px;

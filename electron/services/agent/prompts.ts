@@ -40,43 +40,19 @@ const VOICE_PROMPT = `
 
 const TOOL_PROMPT = `
 # 可用工具
-- list_contacts：把人名/群名解析成 username。任何要限定"某人/某群"的查询，先用它拿到 username，再把 username 填进其它工具的 sessionId。
-- search_messages：关键词检索聊天原文，找"谁提过 X / 含某个词的消息 / 某件具体的事"。命中带 anchor 锚点。尽量带 sessionId 限定范围（不带只扫最近会话且偏慢）。
-- semantic_search：找"某主题/相关内容"。带 sessionId 且已配置嵌入模型时走语义向量 + 关键词混合检索；否则回退关键词检索。命中带 anchor，主题类问题优先用它。
-- get_context：用命中里的 anchor 展开该消息前后的原文，用来核对事实、拿到可引用的出处。
-- get_timeline：读某个会话在某段时间内的连续消息，适合"某天/某段时间聊了什么""把这段讲清楚"。
-- transcribe_voice_message：转写 get_context / get_timeline 返回的语音消息。只转写会影响当前结论的相关语音，参数使用消息里的 sessionId、localId、createTime；默认用缓存，只有用户明确要求重新识别时才传 force=true。
-- chat_stats：纯 SQL 统计，回答"数量/排名/频率"——总数与各类型(overview)、互动最多的人(ranking)、消息量按小时/星期/月分布与高峰(time_distribution)。数数/排名一律用它，别拿检索去数。
-- list_groups：列出群聊（含成员数，按活跃排序）。
-- group_members：列某个群的成员名单（chatroomId = 群 username，@chatroom 结尾）。
-- group_member_ranking：群内成员发言排行（"群里谁最活跃"）。区分：跨私聊排行用 chat_stats，群内逐成员用这个。
-- search_moments：查询/筛选朋友圈动态（只读），支持发布者 usernames、关键词、时间范围、分页；用于"某人发过什么朋友圈 / 朋友圈里提到 X / 某段时间朋友圈内容"。
-- moments_stats：统计朋友圈动态（只读），用于"朋友圈发帖趋势 / 内容类型占比 / 谁发得多 / 点赞评论最多"，返回适合做图的数据分布。
-- search_moment_media：检索朋友圈里的正文图片、评论图片和评论表情包，返回 mediaId。用户说"某人朋友圈第一张图片"时，默认理解为"这个人最新一条含图朋友圈里的第 1 张图"，先 list_contacts 拿 usernames，再 search_moment_media({order:"latest",target:"post",limit:1})。
-- search_media：检索本地聊天记录里的历史图片/表情包，按会话、时间、方向、类型和前文语境筛选；query 存在且图片向量化已开启时，只搜索已经建立好的历史图片向量，不会现场向量化历史图片。结果里的 mediaId 可交给 inspect_media_image 看图，或交给 send_media_from_history 展示/回复。
-- search_similar_media：用本轮用户上传的图片做以图找图，只从已经建立好的聊天记录/朋友圈历史图片向量里找相似媒体，不会现场向量化历史图片。用户说“这张图以前发过吗 / 找类似这张的 / 历史里有没有这张”时用它；uploadedImageId 默认 upload-1。
-- inspect_media_image：把 search_media / search_moment_media 返回的 mediaId 自动下载、解密并喂给当前 Agent 模型识别图片。用于"这张图是什么/朋友圈第一张图是什么/聊天记录上一张图里有什么"。如果模型不支持图像输入，会返回明确错误；不要假装看过。
-- send_media_from_history：把 search_media / search_moment_media 选中的历史图片/表情包作为当前回复图片展示或回复附件。只在用户明确要看/发/抽取历史图片或表情包时用；发出后不要输出路径。
-- send_random_image：从本地聊天记录里随机抽一张历史图片作为当前回复图片。仅当用户明确要求"随机发张图/抽张图/来张老照片"这类玩法时使用，回答时提一下来源（谁/何时）。
-- query_sql：【兜底·只读·最后手段】仅当上面结构化工具都答不了时才用；调用前必须说明哪个结构化工具试过、为什么不够；能用结构化工具回答的一律不准写 SQL。
-- delegate_analysis：把"要翻大量消息才能归纳"的重活（总结某人某段时间都聊了啥、梳理某话题来龙去脉）委托给子助手，只回结论，原始消息不占你的上下文。大任务先拆成最多 4 个互相独立的 tasks，一次调用 delegate_analysis({ tasks, maxConcurrency: 4 }) 并发执行；简单精确查询别用它，直接 search_messages / chat_stats。
-- update_plan：把复杂任务拆成步骤清单。跨多人/长时间跨度/要综合多轮的问题，先用它列计划，每推进一步重发整份更新后的清单（done/in_progress/pending）。简单一步到位的别用。
-- recall：检索你记过的长期记忆（用户画像/偏好/长期事实）。回答涉及用户个人情况/偏好/长期关系时，先查一下有没有记过。
-- remember：记住一条关于用户的长期记忆，跨对话保留（下次开场会注入高重要度记忆）。只在用户透露稳定偏好/身份/重要关系或事实时用；一次性、琐碎、能从聊天记录直接查到的别记。
-- list_memories：浏览已记的长期记忆（按范围/类型，不带检索词），用于盘点或整理前查看。
-- forget：删除一条过时/记错的长期记忆（id 来自 recall / list_memories），用户纠正旧信息时用。
-- consolidate_memory：整理记忆，分组去冗余、防膨胀；记了很多条或用户要"整理记忆"时调。
-- audit_memories / apply_memory_fix：体检长期记忆，找重复、低置信、过期条目；真正删除/整理前必须让用户确认，确认后才传 confirmed=true。
-- find_files：按文件名、路径、类型、时间搜索电脑本机文件。找不到路径时优先用它，不要让用户自己猜路径。
-- search_local_files：在本机内容索引里搜索文本。内容索引只覆盖常用目录和用户显式 roots；找不到时可让 index_local_files 刷新。
-- index_local_files：刷新本机文件索引。默认只做轻量文件名/类型/时间索引；content=true 才抽取常用目录或指定 roots 的文本内容。
-- add_knowledge_source / search_knowledge / remove_knowledge_source：管理全局资料库，把文档、网页、项目资料加入可检索知识库，再按 query 检索。
-- create_artifact：产出 HTML、Excel、Word、PPT 本机文件。参数齐全但 confirmed!==true 时只返回 requiresConfirmation；用户确认后才传 confirmed=true 写文件。
-- create_task / list_tasks / update_task / cancel_task / run_task_now：管理主动/定时任务。任务不得发送微信消息；高风险动作执行前必须确认。
-- list_audit_logs / rollback_operation：查看 AI 操作审计和按快照回滚文件。回滚必须先确认，再传 confirmed=true。
-- desktop_screenshot / desktop_ocr：只看桌面，不点击、不键入；软件内对话里截图只保存到本机并可预览，不等于发微信。不要说"我会发到微信/发给某人"。
-- persona_control：控制数字分身/克隆好友流程。用户说"打开/开启/进入/和某人的数字分身聊天"时用 action=open；如果不存在，按工具返回询问是否克隆。用户在上一轮已被询问后回复"确定/可以/开始/克隆吧"等肯定语义时，用 action=confirm_build，并沿用上一轮工具输出里的 sessionId/displayName。用户明确要求"向量化/建立语义索引"时用 action=vectorize。
-- export_chat：自动化导出一个聊天会话。只用于用户明确要求导出聊天记录；先 validateOnly=true 校验/解析，缺 session/dateRange/format/mediaOptions/outputDir 就追问。mediaOptions 必须显式给头像、图片、视频、表情、语音五项布尔值。参数齐全后先请求最终确认；只有用户明确确认后，才调用 confirmed=true 写文件。支持 chatlab、chatlab-jsonl、json、html、excel、sql，不支持 txt。
+每个工具的具体用法、参数约定和使用边界都写在工具自身的 description 里，以那里为准。这里只给全貌：
+- 聊天记录：list_contacts、search_messages、semantic_search、get_context、get_timeline、chat_stats、transcribe_voice_message
+- 群聊：list_groups、group_members、group_member_ranking
+- 朋友圈：search_moments、moments_stats、search_moment_media
+- 历史图片/表情包：search_media、search_similar_media、inspect_media_image、send_media_from_history、send_random_image
+- 长期记忆：recall、remember、list_memories、forget、consolidate_memory、audit_memories、apply_memory_fix
+- 本机文件与资料库：find_files、search_local_files、index_local_files、add_knowledge_source、search_knowledge、remove_knowledge_source
+- 产出文件与任务：create_artifact、create_task、list_tasks、update_task、cancel_task、run_task_now（任务不得发送微信消息）
+- 审计与回滚：list_audit_logs、rollback_operation
+- 桌面：desktop_screenshot、desktop_ocr（只看，不点击、不键入）
+- 数字分身：persona_control；导出聊天记录：export_chat
+- 重活委托：delegate_analysis；步骤清单：update_plan
+- 兜底 SQL：query_sql（只读、最后手段，见行为准则）
 `
 
 const ROUTING_PROMPT = `

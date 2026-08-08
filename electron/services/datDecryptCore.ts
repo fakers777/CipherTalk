@@ -6,6 +6,7 @@
  */
 import { readFileSync, existsSync } from 'fs'
 import crypto from 'crypto'
+import { stripTrailingNulBytes } from './imageComplete'
 
 export type DatDecryptOutcome = {
   data: Buffer
@@ -73,6 +74,12 @@ function strictRemovePadding(data: Buffer): Buffer {
 
 export function decryptDatV3(inputPath: string, xorKey: number): Buffer {
   const data = readFileSync(inputPath)
+  // 旧版微信偶发把明文 JPEG/PNG 直接落成 .dat（无 V4 头）。此时再 XOR 会毁掉文件头，
+  // 表现为「图片不完整」且 headHex 像 8cab8c93…（即 ffd8ffe0 XOR 0x73）。
+  if (detectImageExtension(data)) {
+    // 明文 .dat 常带尾部 0x00 填充，裁掉以免下游 IEND/EOI 校验误判不完整
+    return stripTrailingNulBytes(data)
+  }
   const out = Buffer.alloc(data.length)
   for (let i = 0; i < data.length; i += 1) {
     out[i] = data[i] ^ xorKey

@@ -28,12 +28,10 @@ const BrowserWindowPage = () => {
     useEffect(() => {
         // 从 URL 参数获取
         const searchParams = new URLSearchParams(window.location.hash.split('?')[1]);
-        const url = searchParams.get('url') || '';
-        const title = searchParams.get('title') || '';
-
-        // 解码 URL
-        const decodedUrl = decodeURIComponent(url);
-        const decodedTitle = decodeURIComponent(title);
+        // URLSearchParams.get 已经解码过一次，不能再 decodeURIComponent，
+        // 否则支付宝等带 %xx 参数的 URL 会被二次解码导致验签失败
+        const decodedUrl = searchParams.get('url') || '';
+        const decodedTitle = searchParams.get('title') || '';
 
         setParams({ url: decodedUrl, title: decodedTitle });
         if (decodedTitle) setPageTitle(decodedTitle);
